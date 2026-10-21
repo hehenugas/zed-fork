@@ -18,7 +18,9 @@ command -v gh >/dev/null || fail "gh (GitHub CLI) not found"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 log "Downloading the latest release"
-gh release download --repo "$REPO" --dir "$TMP" --pattern '*.AppImage' --pattern SHA256SUMS.txt
+TAG="$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName')"
+[ -n "$TAG" ] || fail "no release found in $REPO"
+gh release download "$TAG" --repo "$REPO" --dir "$TMP" --pattern '*.AppImage' --pattern SHA256SUMS.txt
 (cd "$TMP" && sha256sum -c SHA256SUMS.txt) || fail "checksum mismatch"
 SRC="$(ls "$TMP"/zed-fork_*_x86_64.AppImage)"
 OUT="$BIN_DIR/zed-fork.AppImage"
