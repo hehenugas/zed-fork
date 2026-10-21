@@ -330,6 +330,9 @@
     "enabled": false,
     "debounce_ms": 250,
   },
+  // Show panel buttons in a vertical activity bar on the window edges
+  // instead of in the status bar.
+  "activity_bar": false,
   // Determines how snippets are sorted relative to other completion items.
   //
   // 1. Place snippets at the top of the completion list:

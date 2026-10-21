@@ -389,7 +389,14 @@ struct PanelEntry {
 
 pub struct PanelButtons {
     dock: Entity<Dock>,
+    activity_bar_side: Option<DockPosition>,
     _settings_subscription: Subscription,
+}
+
+pub struct ActivityBarButtons {
+    pub left: Entity<PanelButtons>,
+    pub bottom: Entity<PanelButtons>,
+    pub right: Entity<PanelButtons>,
 }
 
 pub(crate) const PANEL_SIZE_STATE_KEY: &str = "dock_panel_size";
@@ -1382,7 +1389,19 @@ impl PanelButtons {
         let settings_subscription = cx.observe_global::<SettingsStore>(|_, cx| cx.notify());
         Self {
             dock,
+            activity_bar_side: None,
             _settings_subscription: settings_subscription,
+        }
+    }
+
+    pub fn for_activity_bar(
+        dock: Entity<Dock>,
+        side: DockPosition,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            activity_bar_side: Some(side),
+            ..Self::new(dock, cx)
         }
     }
 }
@@ -1394,9 +1413,18 @@ impl Render for PanelButtons {
         let is_open = dock.is_open;
         let dock_position = dock.position;
 
-        let (menu_anchor, menu_attach) = match dock.position {
-            DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
-            DockPosition::Bottom | DockPosition::Right => (Anchor::BottomRight, Anchor::TopRight),
+        let activity_bar_side = self.activity_bar_side;
+        let hide_in_status_bar =
+            activity_bar_side.is_none() && WorkspaceSettings::get_global(cx).activity_bar;
+        let (menu_anchor, menu_attach) = match activity_bar_side {
+            Some(DockPosition::Right) => (Anchor::TopRight, Anchor::TopLeft),
+            Some(_) => (Anchor::TopLeft, Anchor::TopRight),
+            None => match dock.position {
+                DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
+                DockPosition::Bottom | DockPosition::Right => {
+                    (Anchor::BottomRight, Anchor::TopRight)
+                }
+            },
         };
 
         let dock_entity = self.dock.clone();
@@ -1534,7 +1562,11 @@ impl Render for PanelButtons {
                             // Include active state in element ID to invalidate the cached
                             // tooltip when panel state changes (e.g., via keyboard shortcut)
                             let button = IconButton::new((name, is_active_button as u64), icon)
-                                .icon_size(IconSize::Small)
+                                .icon_size(if activity_bar_side.is_some() {
+                                    IconSize::Medium
+                                } else {
+                                    IconSize::Small
+                                })
                                 .toggle_state(is_active_button)
                                 .tab_index(0isize)
                                 .aria_label(icon_tooltip)
@@ -1563,6 +1595,14 @@ impl Render for PanelButtons {
             })
             .collect();
 
+        if hide_in_status_bar {
+            buttons.clear();
+        }
+
+        if activity_bar_side.is_some() {
+            return v_flex().gap_1().children(buttons).into_any_element();
+        }
+
         if dock_position == DockPosition::Right {
             buttons.reverse();
         }
@@ -1581,6 +1621,7 @@ impl Render for PanelButtons {
             .when(has_buttons && dock.position == DockPosition::Left, |this| {
                 this.child(Divider::vertical().color(DividerColor::Border))
             })
+            .into_any_element()
     }
 }
 

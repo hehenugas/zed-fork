@@ -46,6 +46,7 @@ pub struct WorkspaceSettings {
     pub zoomed_padding: bool,
     pub window_decorations: settings::WindowDecorations,
     pub focus_follows_mouse: FocusFollowsMouse,
+    pub activity_bar: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -164,6 +165,7 @@ impl Settings for WorkspaceSettings {
                         .unwrap_or(250),
                 ),
             },
+            activity_bar: workspace.activity_bar.unwrap(),
         }
     }
 }

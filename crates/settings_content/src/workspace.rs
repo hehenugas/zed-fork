@@ -172,6 +172,11 @@ pub struct WorkspaceSettingsContent {
     /// Whether the focused panel follows the mouse location
     /// Default: false
     pub focus_follows_mouse: Option<FocusFollowsMouse>,
+    /// Show panel buttons in a vertical activity bar beside the window edges
+    /// instead of in the status bar.
+    ///
+    /// Default: false
+    pub activity_bar: Option<bool>,
 }
 
 #[with_fallible_options]
