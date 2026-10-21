@@ -73,6 +73,16 @@ jobs:
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "zed-fork_${version}_${GITHUB_RUN_NUMBER}_x86_64.AppImage"
           sha256sum zed-fork_*.AppImage > SHA256SUMS.txt
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zed-fork-appimage
+          path: |
+            zed-fork_*.AppImage
+            SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 7
+
       - name: Publish release
         run: |
           tag="fork-${GITHUB_RUN_NUMBER}"
