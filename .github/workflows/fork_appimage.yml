@@ -21,6 +21,9 @@ jobs:
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
+      # webrtc-sys does not build with the runner's g++ 11.
+      CC: clang
+      CXX: clang++
     steps:
       - name: Free disk space
         run: |
