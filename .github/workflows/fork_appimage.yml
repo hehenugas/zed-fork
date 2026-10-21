@@ -38,8 +38,13 @@ jobs:
       - name: Install build dependencies
         run: script/linux
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
       - name: Install cargo-about
-        run: cargo install cargo-about --locked --version 0.8.2
+        run: command -v cargo-about >/dev/null || cargo install cargo-about --locked --version 0.8.2
 
       - name: Install appimagetool
         run: |
