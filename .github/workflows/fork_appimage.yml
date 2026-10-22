@@ -67,6 +67,13 @@ jobs:
           if [[ -n "${ZED_FORK_USER_DATA_DIR:-}" ]]; then
             exec "$HERE/libexec/zed-editor" --user-data-dir "$ZED_FORK_USER_DATA_DIR" "$@"
           fi
+          ZED_FLATPAK_HOME="$HOME/.var/app/dev.zed.Zed"
+          if [[ -d "$ZED_FLATPAK_HOME/config/zed" ]]; then
+            export FLATPAK_XDG_CONFIG_HOME="$ZED_FLATPAK_HOME/config"
+            export FLATPAK_XDG_DATA_HOME="$ZED_FLATPAK_HOME/data"
+            export FLATPAK_XDG_CACHE_HOME="$ZED_FLATPAK_HOME/cache"
+            export FLATPAK_XDG_STATE_HOME="$ZED_FLATPAK_HOME/.local/state"
+          fi
           exec "$HERE/libexec/zed-editor" "$@"
           RUN
           chmod +x AppDir/AppRun
