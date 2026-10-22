@@ -1221,6 +1221,7 @@ impl From<&Arc<InitialGraphCommitData>> for CommitHistoryEntry {
     }
 }
 
+const MAX_SECTION_LIST_ROWS: usize = 12;
 const MAX_PANEL_EDITOR_LINES: usize = 6;
 
 pub(crate) fn commit_message_editor(
@@ -6994,12 +6995,14 @@ impl GitPanel {
 
         let footer = v_flex()
             .when(self.commit_editor_expanded, |this| this.flex_1().min_h_0())
-            .child(PanelRepoFooter::new(
-                display_name,
-                branch,
-                head_commit,
-                Some(git_panel),
-            ))
+            .when(self.repository_override.is_none(), |this| {
+                this.child(PanelRepoFooter::new(
+                    display_name,
+                    branch,
+                    head_commit,
+                    Some(git_panel),
+                ))
+            })
             .when(title_exceeds_limit, |this| {
                 this.child(
                     h_flex()
@@ -9550,6 +9553,68 @@ impl GitPanel {
                                                     .truncate(),
                                             ),
                                     )
+                                    .child(div().flex_1())
+                                    .child(
+                                        h_flex()
+                                            .gap_0p5()
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .child(
+                                                IconButton::new(
+                                                    SharedString::from(format!(
+                                                        "section-fetch-{repository_id:?}"
+                                                    )),
+                                                    IconName::ArrowCircle,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text("Fetch"))
+                                                .on_click({
+                                                    let panel = panel.clone();
+                                                    move |_, window, cx| {
+                                                        panel.update(cx, |panel, cx| {
+                                                            panel.fetch(false, window, cx)
+                                                        });
+                                                    }
+                                                }),
+                                            )
+                                            .child(
+                                                IconButton::new(
+                                                    SharedString::from(format!(
+                                                        "section-pull-{repository_id:?}"
+                                                    )),
+                                                    IconName::ArrowDown,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text("Pull"))
+                                                .on_click({
+                                                    let panel = panel.clone();
+                                                    move |_, window, cx| {
+                                                        panel.update(cx, |panel, cx| {
+                                                            panel.pull(false, window, cx)
+                                                        });
+                                                    }
+                                                }),
+                                            )
+                                            .child(
+                                                IconButton::new(
+                                                    SharedString::from(format!(
+                                                        "section-push-{repository_id:?}"
+                                                    )),
+                                                    IconName::ArrowUp,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text("Push"))
+                                                .on_click({
+                                                    let panel = panel.clone();
+                                                    move |_, window, cx| {
+                                                        panel.update(cx, |panel, cx| {
+                                                            panel.push(false, false, window, cx)
+                                                        });
+                                                    }
+                                                }),
+                                            ),
+                                    )
                                     .child(
                                         Label::new(format!("{change_count}"))
                                             .size(LabelSize::Small)
@@ -9567,9 +9632,7 @@ impl GitPanel {
                                     })),
                             )
                             .when(!collapsed, |this| {
-                                this.child(
-                                    div().h(px(620.)).w_full().overflow_hidden().child(panel),
-                                )
+                                this.child(div().w_full().overflow_hidden().child(panel))
                             })
                     }),
             )
@@ -9684,31 +9747,62 @@ impl Render for GitPanel {
                         |this| this.child(self.render_tab_bar(cx)),
                     )
                     .map(|this| match self.active_tab {
-                        GitPanelTab::Changes => this
-                            .children(self.render_changes_header(window, cx))
-                            .when(!self.commit_editor_expanded, |this| {
-                                this.map(|this| {
-                                    if let Some(repo) = self.active_repository.clone()
-                                        && has_entries
-                                    {
-                                        this.child(self.render_entries(
-                                            has_write_access,
-                                            repo,
-                                            window,
-                                            cx,
-                                        ))
-                                    } else {
-                                        this.child(self.render_empty_state(cx).into_any_element())
-                                    }
+                        GitPanelTab::Changes => {
+                            let is_section = self.repository_override.is_some();
+                            let section_border = cx.theme().colors().border_variant;
+                            let entry_count = match &self.view_mode {
+                                GitPanelViewMode::Tree(state) => state.logical_indices.len(),
+                                GitPanelViewMode::Flat => self.visible_flat_entry_indices().len(),
+                            };
+                            let section_list_height = self.list_item_height()
+                                * entry_count.min(MAX_SECTION_LIST_ROWS) as f32;
+                            this.children(self.render_changes_header(window, cx))
+                                .when(is_section, |this| {
+                                    this.children(self.render_footer(window, cx))
                                 })
-                            })
-                            .children(self.render_footer(window, cx))
-                            .when(self.amend_pending, |this| {
-                                this.child(self.render_pending_amend(cx))
-                            })
-                            .when(!self.amend_pending, |this| {
-                                this.children(self.render_previous_commit(window, cx))
-                            }),
+                                .when(!self.commit_editor_expanded, |this| {
+                                    this.map(|this| {
+                                        if let Some(repo) = self.active_repository.clone()
+                                            && has_entries
+                                        {
+                                            let entries = self.render_entries(
+                                                has_write_access,
+                                                repo,
+                                                window,
+                                                cx,
+                                            );
+                                            if is_section {
+                                                this.child(
+                                                    div()
+                                                        .w_full()
+                                                        .flex_none()
+                                                        .h(section_list_height)
+                                                        .border_t_1()
+                                                        .border_color(section_border)
+                                                        .child(entries),
+                                                )
+                                            } else {
+                                                this.child(entries)
+                                            }
+                                        } else if is_section {
+                                            this
+                                        } else {
+                                            this.child(
+                                                self.render_empty_state(cx).into_any_element(),
+                                            )
+                                        }
+                                    })
+                                })
+                                .when(!is_section, |this| {
+                                    this.children(self.render_footer(window, cx))
+                                })
+                                .when(self.amend_pending, |this| {
+                                    this.child(self.render_pending_amend(cx))
+                                })
+                                .when(!self.amend_pending && !is_section, |this| {
+                                    this.children(self.render_previous_commit(window, cx))
+                                })
+                        }
                         GitPanelTab::History => this.child(self.render_history_tab(window, cx)),
                     })
                     .into_any_element(),
