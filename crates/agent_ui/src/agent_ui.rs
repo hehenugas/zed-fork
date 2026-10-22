@@ -1107,6 +1107,7 @@ mod tests {
             show_merge_conflict_indicator: true,
             max_idle_retained_threads: 5,
             threads_sidebar: agent_settings::ThreadsSidebarSettings {
+                scope: Default::default(),
                 auto_open: true,
                 default_width: px(300.),
                 position: settings::SidebarDockPosition::Left,
