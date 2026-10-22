@@ -1571,6 +1571,14 @@ struct DispatchingKeystrokes {
     task: Option<Shared<Task<()>>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct SharedDockState {
+    structure: DockStructure,
+    left_panel_size: Option<PanelSizeState>,
+    right_panel_size: Option<PanelSizeState>,
+    bottom_panel_size: Option<PanelSizeState>,
+}
+
 /// Collects everything project-related for a certain window opened.
 /// In some way, is a counterpart of a window, as the [`WindowHandle`] could be downcast into `Workspace`.
 ///
@@ -2536,6 +2544,68 @@ impl Workspace {
                 zoom: bottom_dock_zoom,
             },
         }
+    }
+
+    pub(crate) fn capture_shared_dock_state(&self, window: &Window, cx: &App) -> SharedDockState {
+        fn active_panel_size(dock: &Entity<Dock>, cx: &App) -> Option<PanelSizeState> {
+            let dock = dock.read(cx);
+            dock.active_panel()
+                .and_then(|panel| dock.stored_panel_size_state(panel.as_ref()))
+        }
+
+        SharedDockState {
+            structure: self.capture_dock_state(window, cx),
+            left_panel_size: active_panel_size(&self.left_dock, cx),
+            right_panel_size: active_panel_size(&self.right_dock, cx),
+            bottom_panel_size: active_panel_size(&self.bottom_dock, cx),
+        }
+    }
+
+    pub(crate) fn apply_shared_dock_state(
+        &mut self,
+        shared_state: SharedDockState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for dock in self.all_docks() {
+            dock.update(cx, |dock, cx| dock.zoom_out(window, cx));
+        }
+
+        let SharedDockState {
+            structure,
+            left_panel_size,
+            right_panel_size,
+            bottom_panel_size,
+        } = shared_state;
+
+        for (dock, data, panel_size) in [
+            (&self.left_dock, structure.left, left_panel_size),
+            (&self.right_dock, structure.right, right_panel_size),
+            (&self.bottom_dock, structure.bottom, bottom_panel_size),
+        ] {
+            let panel_key = dock.update(cx, |dock, cx| {
+                let panel_key = data
+                    .active_panel
+                    .as_deref()
+                    .and_then(|name| dock.panel_index_for_persistent_name(name, cx))
+                    .and_then(|index| {
+                        dock.activate_panel(index, window, cx);
+                        let panel = dock.active_panel()?.clone();
+                        if let Some(panel_size) = panel_size {
+                            dock.set_panel_size_state(panel.as_ref(), panel_size, cx);
+                        }
+                        Some(panel.panel_key())
+                    });
+                dock.restore_serialized_state(data, window, cx);
+                panel_key
+            });
+
+            if let (Some(panel_key), Some(panel_size)) = (panel_key, panel_size) {
+                self.persist_panel_size_state(panel_key, panel_size, cx);
+            }
+        }
+
+        self.serialize_workspace(window, cx);
     }
 
     pub fn set_dock_structure(

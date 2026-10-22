@@ -1341,6 +1341,9 @@ impl MultiWorkspace {
         }
 
         let old_active_workspace = self.workspace().clone();
+        let shared_dock_state = old_active_workspace
+            .read(cx)
+            .capture_shared_dock_state(window, cx);
         let old_active_was_retained = self.active_workspace_is_retained();
         let should_retain_workspaces = self.multi_workspace_enabled(cx);
 
@@ -1373,10 +1376,9 @@ impl MultiWorkspace {
         }
 
         // The platform window is shared across all workspaces in this window.
-        // The previously-active workspace left the title and edited indicator
-        // reflecting its own state, so re-apply them from the newly-active
-        // workspace (which is now the chrome owner per `owns_window_chrome`).
+        // Carry its dock layout forward before refreshing the shared window chrome.
         workspace.update(cx, |workspace, cx| {
+            workspace.apply_shared_dock_state(shared_dock_state, window, cx);
             workspace.refresh_window_state(window, cx);
         });
 

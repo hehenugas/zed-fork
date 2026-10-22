@@ -4954,7 +4954,7 @@ impl ThreadView {
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.list_state.item_count() > 0;
-        let fills_container = !has_messages || editor_expanded;
+        let fills_container = has_messages && editor_expanded;
         let composer_is_read_only = self.message_editor.read(cx).editor().read(cx).read_only(cx);
         let discard_draft_button = composer_is_read_only.then(|| {
             div()
@@ -4974,8 +4974,9 @@ impl ThreadView {
         });
 
         h_flex()
+            .px_3()
             .py_2()
-            .bg(editor_bg_color)
+            .bg(cx.theme().colors().panel_background)
             .justify_center()
             .on_action(cx.listener(Self::handle_message_editor_move_up))
             .map(|this| {
@@ -4985,20 +4986,25 @@ impl ThreadView {
                         .border_color(cx.theme().colors().border)
                         .when(editor_expanded, |this| this.h(vh(0.8, window)))
                 } else {
-                    this.flex_1().size_full()
+                    this
                 }
             })
             .child(
                 v_flex()
-                    .when_some(max_content_width, |this, max_w| this.flex_basis(max_w))
-                    .when(max_content_width.is_none(), |this| this.w_full())
+                    .w_full()
+                    .when_some(max_content_width, |this, max_w| this.max_w(max_w))
                     .min_w_0()
                     .when(fills_container, |this| this.h_full())
-                    .px_2()
                     .flex_shrink_1()
                     .flex_grow_0()
                     .justify_between()
                     .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .bg(editor_bg_color)
+                    .px_3()
+                    .py_2()
                     .child(
                         v_flex()
                             .relative()
@@ -5293,6 +5299,79 @@ impl ThreadView {
                             )
                     })
             }))
+            .into_any_element()
+    }
+
+    fn render_empty_thread(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.is_subagent() {
+            return div().into_any_element();
+        }
+
+        let suggestion = |id: &'static str, label: &'static str, prompt: &'static str| {
+            Button::new(id, label)
+                .label_size(LabelSize::Small)
+                .style(ButtonStyle::Outlined)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.message_editor.update(cx, |message_editor, cx| {
+                        message_editor.insert_text(prompt, window, cx);
+                    });
+                    this.message_editor.focus_handle(cx).focus(window, cx);
+                }))
+        };
+
+        let suggestions = h_flex()
+            .flex_wrap()
+            .justify_center()
+            .gap_1()
+            .child(suggestion(
+                "explain-project",
+                "Explain this project",
+                "Give me a quick overview of this project and how its main pieces fit together.",
+            ))
+            .child(suggestion(
+                "find-a-bug",
+                "Find a bug",
+                "Help me find and fix a bug in this project.",
+            ))
+            .child(suggestion(
+                "build-a-feature",
+                "Build a feature",
+                "Help me plan and build a feature in this project.",
+            ));
+
+        let max_content_width = AgentSettings::get_global(cx).max_content_width;
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .items_center()
+            .justify_center()
+            .px_4()
+            .child(
+                v_flex()
+                    .w_full()
+                    .when_some(max_content_width, |this, max_width| this.max_w(max_width))
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .p_3()
+                            .rounded_lg()
+                            .bg(cx.theme().colors().element_background)
+                            .child(
+                                Icon::new(IconName::ZedAssistant)
+                                    .size(IconSize::XLarge)
+                                    .color(Color::Accent),
+                            ),
+                    )
+                    .child(Label::new("What would you like to work on?").size(LabelSize::Large))
+                    .child(
+                        Label::new("Ask a question, describe a task, or add context with #.")
+                            .color(Color::Muted),
+                    )
+                    .child(suggestions),
+            )
             .into_any_element()
     }
 
@@ -13030,7 +13109,11 @@ impl Render for ThreadView {
                         .vertical_scrollbar_for(&list_state, window, cx)
                         .into_any()
                 } else {
-                    this.into_any()
+                    this.flex_1()
+                        .min_h_0()
+                        .size_full()
+                        .child(self.render_empty_thread(cx))
+                        .into_any()
                 }
             });
 
