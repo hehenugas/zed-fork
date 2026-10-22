@@ -68,7 +68,8 @@ jobs:
           #!/usr/bin/env bash
           HERE="$(dirname "$(readlink -f "$0")")"
           export ZED_UPDATE_EXPLANATION="Updates are disabled in the fork AppImage."
-          exec "$HERE/libexec/zed-editor" "$@"
+          USER_DATA_DIR="${ZED_FORK_USER_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/zed-fork}"
+          exec "$HERE/libexec/zed-editor" --user-data-dir "$USER_DATA_DIR" "$@"
           RUN
           chmod +x AppDir/AppRun
           version="$(script/get-crate-version zed)"

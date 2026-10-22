@@ -17,6 +17,8 @@ pub struct ScrollbarSettings {
 #[derive(Debug, Clone, PartialEq, RegisterSetting)]
 pub struct GitPanelSettings {
     pub button: bool,
+    pub multi_repo: bool,
+    pub hide_clean_repos: bool,
     pub dock: DockPosition,
     pub default_width: Pixels,
     pub status_style: StatusStyle,
@@ -61,6 +63,8 @@ impl Settings for GitPanelSettings {
         let git_panel = content.git_panel.clone().unwrap();
         Self {
             button: git_panel.button.unwrap(),
+            multi_repo: git_panel.multi_repo.unwrap_or(false),
+            hide_clean_repos: git_panel.hide_clean_repos.unwrap_or(false),
             dock: git_panel.dock.unwrap().into(),
             default_width: git_panel.default_width.unwrap().into_gpui(),
             status_style: git_panel.status_style.unwrap(),

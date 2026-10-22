@@ -222,17 +222,17 @@ export APP_CLI="zed"
 export APP_ICON="zed"
 export APP_ARGS="%U"
 if [[ "$channel" == "preview" ]]; then
-  export APP_NAME="Zed Preview"
-  APP_ID="dev.zed.Zed-Preview"
+  export APP_NAME="Zed Fork Preview"
+  APP_ID="dev.zed.Zed-Fork-Preview"
 elif [[ "$channel" == "nightly" ]]; then
-  export APP_NAME="Zed Nightly"
-  APP_ID="dev.zed.Zed-Nightly"
+  export APP_NAME="Zed Fork Nightly"
+  APP_ID="dev.zed.Zed-Fork-Nightly"
 elif [[ "$channel" == "dev" ]]; then
-  export APP_NAME="Zed Devel"
-  APP_ID="dev.zed.Zed-Dev"
+  export APP_NAME="Zed Fork Dev"
+  APP_ID="dev.zed.Zed-Fork-Dev"
 else
-  export APP_NAME="Zed"
-  APP_ID="dev.zed.Zed"
+  export APP_NAME="Zed Fork"
+  APP_ID="dev.zed.Zed-Fork"
 fi
 
 mkdir -p "${zed_dir}/share/applications"

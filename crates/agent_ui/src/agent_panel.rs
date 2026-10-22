@@ -29,6 +29,7 @@ use zed_actions::{
         ResetAgentZoom, ResetOnboarding, ResolveConflictedFilesWithAgent,
         ResolveConflictsWithAgent, ReviewBranchDiff, SelectAgent,
     },
+    agents_sidebar::ToggleThreadHistory,
     assistant::{
         FocusAgent, ManageSkills, OpenGlobalAgentsMdRules, OpenProjectAgentsMdRules, Toggle,
         ToggleFocus,
@@ -6168,6 +6169,8 @@ impl AgentPanel {
             }));
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
+        let show_history_button = AgentSettings::get_global(cx).threads_sidebar.mode
+            == settings::ThreadsSidebarMode::Popover;
 
         let base_container = h_flex()
             .size_full()
@@ -6205,6 +6208,13 @@ impl AgentPanel {
                 .with_handle(self.new_thread_menu_handle.clone())
                 .menu(move |window, cx| new_thread_menu_builder(window, cx));
 
+            let history_button = IconButton::new("thread-history", IconName::Clock)
+                .icon_size(IconSize::Small)
+                .tooltip(Tooltip::text("Thread History"))
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(ToggleThreadHistory.boxed_clone(), cx);
+                });
+
             let sandbox_status = self
                 .active_conversation_view()
                 .and_then(|conversation_view| conversation_view.read(cx).root_thread_view())
@@ -6235,6 +6245,9 @@ impl AgentPanel {
                         .flex_none()
                         .gap_1()
                         .children(sandbox_status)
+                        .when(can_create_entries && show_history_button, |this| {
+                            this.child(history_button)
+                        })
                         .when(can_create_entries, |this| this.child(new_thread_menu))
                         .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),

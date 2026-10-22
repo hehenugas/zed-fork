@@ -939,6 +939,8 @@ pub mod agents_sidebar {
     actions!(
         agents_sidebar,
         [
+            /// Opens or closes thread history.
+            ToggleThreadHistory,
             /// Moves focus to the sidebar's search/filter editor.
             FocusSidebarFilter,
         ]

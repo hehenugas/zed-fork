@@ -39,7 +39,7 @@ Exec=$OUT %U
 Icon=zed-fork
 Terminal=false
 Categories=Development;TextEditor;
-StartupWMClass=dev.zed.Zed
+StartupWMClass=dev.zed.Zed-Fork
 DESK
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
 mkdir -p "$HOME/.local/bin" && ln -sf "$OUT" "$HOME/.local/bin/zed-fork"

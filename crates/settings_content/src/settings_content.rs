@@ -734,6 +734,14 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: true
     pub button: Option<bool>,
+    /// Show every repository as an independent section in the Git panel.
+    ///
+    /// Default: false
+    pub multi_repo: Option<bool>,
+    /// Hide repositories with no changes when `multi_repo` is enabled.
+    ///
+    /// Default: false
+    pub hide_clean_repos: Option<bool>,
     /// Where to dock the panel.
     ///
     /// Default: right (Agentic layout), left (Classic layout)

@@ -1122,6 +1122,9 @@ struct GitPanelContextMenu {
 
 pub struct GitPanel {
     pub(crate) active_repository: Option<Entity<Repository>>,
+    repository_override: Option<Entity<Repository>>,
+    repository_sections: Vec<(RepositoryId, Entity<GitPanel>)>,
+    collapsed_repositories: HashSet<RepositoryId>,
     pub(crate) commit_editor: Entity<Editor>,
     /// Whether the commit editor should fill the vertical height of the panel.
     commit_editor_expanded: bool,
@@ -1281,11 +1284,46 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) -> Entity<Self> {
+        Self::new_with_repository(workspace, serialized_panel, None, window, cx)
+    }
+
+    fn new_with_repository(
+        workspace: &mut Workspace,
+        serialized_panel: Option<SerializedGitPanel>,
+        repository_override: Option<Entity<Repository>>,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Entity<Self> {
         let project = workspace.project().clone();
         let app_state = workspace.app_state().clone();
         let fs = app_state.fs.clone();
         let git_store = project.read(cx).git_store().clone();
-        let active_repository = project.read(cx).active_repository(cx);
+        let active_repository = repository_override
+            .clone()
+            .or_else(|| project.read(cx).active_repository(cx));
+        let mut repository_sections = Vec::new();
+        if repository_override.is_none() && GitPanelSettings::get_global(cx).multi_repo {
+            let mut repositories = project
+                .read(cx)
+                .repositories(cx)
+                .iter()
+                .map(|(repository_id, repository)| (*repository_id, repository.clone()))
+                .collect::<Vec<_>>();
+            repositories.sort_by(|(_, left), (_, right)| {
+                left.read(cx)
+                    .work_directory_abs_path
+                    .cmp(&right.read(cx).work_directory_abs_path)
+            });
+            let hide_clean_repos = GitPanelSettings::get_global(cx).hide_clean_repos;
+            for (repository_id, repository) in repositories {
+                if hide_clean_repos && repository.read(cx).status_summary().count == 0 {
+                    continue;
+                }
+                let section =
+                    Self::new_with_repository(workspace, None, Some(repository), window, cx);
+                repository_sections.push((repository_id, section));
+            }
+        }
         let signoff_enabled = serialized_panel
             .as_ref()
             .is_some_and(|panel| panel.signoff_enabled);
@@ -1338,6 +1376,8 @@ impl GitPanel {
             let mut was_folder_indicator = GitPanelSettings::get_global(cx).folder_indicator;
             let mut was_diff_stats = GitPanelSettings::get_global(cx).diff_stats;
             let mut was_commit_editor = GitPanelSettings::get_global(cx).commit_editor;
+            let mut was_multi_repo = GitPanelSettings::get_global(cx).multi_repo;
+            let mut was_hide_clean_repos = GitPanelSettings::get_global(cx).hide_clean_repos;
             cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
                 let settings = GitPanelSettings::get_global(cx);
                 let sort_by = settings.sort_by;
@@ -1347,6 +1387,8 @@ impl GitPanel {
                 let folder_indicator = settings.folder_indicator;
                 let diff_stats = settings.diff_stats;
                 let commit_editor = settings.commit_editor;
+                let multi_repo = settings.multi_repo;
+                let hide_clean_repos = settings.hide_clean_repos;
                 // Changing the setting is an explicit request, so it wins over
                 // whatever this workspace last persisted.
                 if commit_editor != was_commit_editor {
@@ -1383,6 +1425,12 @@ impl GitPanel {
                 if file_icons != was_file_icons || folder_indicator != was_folder_indicator {
                     cx.notify();
                 }
+                if (multi_repo != was_multi_repo || hide_clean_repos != was_hide_clean_repos)
+                    && this.repository_override.is_none()
+                {
+                    this.refresh_repository_sections(window, cx);
+                    cx.notify();
+                }
                 was_sort_by = sort_by;
                 was_group_by = group_by;
                 was_tree_view = tree_view;
@@ -1390,6 +1438,8 @@ impl GitPanel {
                 was_folder_indicator = folder_indicator;
                 was_diff_stats = diff_stats;
                 was_commit_editor = commit_editor;
+                was_multi_repo = multi_repo;
+                was_hide_clean_repos = hide_clean_repos;
             })
             .detach();
 
@@ -1465,6 +1515,9 @@ impl GitPanel {
 
             let mut this = Self {
                 active_repository,
+                repository_override,
+                repository_sections,
+                collapsed_repositories: HashSet::default(),
                 commit_editor,
                 commit_editor_expanded: false,
                 commit_editor_collapsed,
@@ -1533,6 +1586,63 @@ impl GitPanel {
             this.schedule_update(window, cx);
             this
         })
+    }
+
+    fn refresh_repository_sections(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.repository_override.is_some() {
+            return;
+        }
+
+        let settings = GitPanelSettings::get_global(cx);
+        if !settings.multi_repo {
+            self.repository_sections.clear();
+            self.collapsed_repositories.clear();
+            return;
+        }
+
+        let mut repositories = self
+            .project
+            .read(cx)
+            .repositories(cx)
+            .iter()
+            .map(|(repository_id, repository)| (*repository_id, repository.clone()))
+            .collect::<Vec<_>>();
+        repositories.sort_by(|(_, left), (_, right)| {
+            left.read(cx)
+                .work_directory_abs_path
+                .cmp(&right.read(cx).work_directory_abs_path)
+        });
+        if settings.hide_clean_repos {
+            repositories.retain(|(_, repository)| repository.read(cx).status_summary().count > 0);
+        }
+
+        let previous_sections = std::mem::take(&mut self.repository_sections);
+        let mut next_sections = Vec::with_capacity(repositories.len());
+        for (repository_id, repository) in repositories {
+            if let Some((_, section)) = previous_sections
+                .iter()
+                .find(|(existing_id, _)| *existing_id == repository_id)
+            {
+                next_sections.push((repository_id, section.clone()));
+                continue;
+            }
+
+            let Some(workspace) = self.workspace.upgrade() else {
+                continue;
+            };
+            let section = workspace.update(cx, |workspace, cx| {
+                Self::new_with_repository(workspace, None, Some(repository), window, cx)
+            });
+            next_sections.push((repository_id, section));
+        }
+
+        let retained_ids = next_sections
+            .iter()
+            .map(|(repository_id, _)| *repository_id)
+            .collect::<HashSet<_>>();
+        self.collapsed_repositories
+            .retain(|repository_id| retained_ids.contains(repository_id));
+        self.repository_sections = next_sections;
     }
 
     pub fn entry_by_path(&self, path: &RepoPath) -> Option<usize> {
@@ -1948,6 +2058,9 @@ impl GitPanel {
     }
 
     fn serialize(&mut self, cx: &mut Context<Self>) {
+        if self.repository_override.is_some() {
+            return;
+        }
         let signoff_enabled = self.signoff_enabled;
         let commit_editor_collapsed = self
             .commit_editor_toggled
@@ -5325,7 +5438,10 @@ impl GitPanel {
 
     fn schedule_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let handle = cx.entity().downgrade();
-        let new_active_repository = self.project.read(cx).active_repository(cx);
+        let new_active_repository = self
+            .repository_override
+            .clone()
+            .or_else(|| self.project.read(cx).active_repository(cx));
         let active_repository_changed = self.active_repository.as_ref().map(Entity::entity_id)
             != new_active_repository.as_ref().map(Entity::entity_id);
         if active_repository_changed {
@@ -5346,6 +5462,9 @@ impl GitPanel {
             }
         }
         self.active_repository = new_active_repository;
+        if self.repository_override.is_none() {
+            self.refresh_repository_sections(window, cx);
+        }
         self.reopen_commit_buffer(window, cx);
         self.preload_commit_history(cx);
         if self.active_tab == GitPanelTab::History {
@@ -5483,7 +5602,10 @@ impl GitPanel {
             .as_ref()
             .and_then(|op| self.entry_by_path(&op.anchor));
 
-        let active_repository = self.project.read(cx).active_repository(cx);
+        let active_repository = self
+            .repository_override
+            .clone()
+            .or_else(|| self.project.read(cx).active_repository(cx));
         if active_repository != self.active_repository {
             self.active_repository = active_repository;
             self.git_access = None;
@@ -9295,8 +9417,8 @@ impl GitPanel {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl GitPanel {
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_test(
         workspace: &mut Workspace,
         window: &mut Window,
@@ -9305,13 +9427,150 @@ impl GitPanel {
         Self::new(workspace, window, cx)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn active_repository(&self) -> Option<&Entity<Repository>> {
         self.active_repository.as_ref()
+    }
+
+    fn render_repository_sections(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let all_collapsed = !self.repository_sections.is_empty()
+            && self
+                .repository_sections
+                .iter()
+                .all(|(repository_id, _)| self.collapsed_repositories.contains(repository_id));
+        let repository_ids = self
+            .repository_sections
+            .iter()
+            .map(|(repository_id, _)| *repository_id)
+            .collect::<Vec<_>>();
+
+        v_flex()
+            .id("multi-repo-git-panel")
+            .size_full()
+            .overflow_y_scroll()
+            .bg(cx.theme().colors().panel_background)
+            .child(
+                h_flex()
+                    .h_8()
+                    .px_2()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(cx.theme().colors().border)
+                    .child(Label::new("Changes").size(LabelSize::Small))
+                    .child(
+                        IconButton::new(
+                            "toggle-all-repositories",
+                            if all_collapsed {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
+                            },
+                        )
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text(if all_collapsed {
+                            "Expand All Repositories"
+                        } else {
+                            "Collapse All Repositories"
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if all_collapsed {
+                                this.collapsed_repositories.clear();
+                            } else {
+                                this.collapsed_repositories
+                                    .extend(repository_ids.iter().copied());
+                            }
+                            cx.notify();
+                        })),
+                    ),
+            )
+            .children(
+                self.repository_sections
+                    .iter()
+                    .map(|(repository_id, panel)| {
+                        let collapsed = self.collapsed_repositories.contains(repository_id);
+                        let repo = panel.read(cx).active_repository.clone();
+                        let (name, branch, change_count) = repo
+                            .as_ref()
+                            .map(|repo| {
+                                let repo = repo.read(cx);
+                                let name = repo
+                                    .work_directory_abs_path
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("Repository")
+                                    .to_owned();
+                                let branch = repo
+                                    .branch
+                                    .as_ref()
+                                    .map(|branch| branch.name().to_string())
+                                    .unwrap_or_else(|| "No branch".to_owned());
+                                let change_count = repo.status_summary().count;
+                                (name, branch, change_count)
+                            })
+                            .unwrap_or_else(|| {
+                                ("Repository".to_owned(), "No branch".to_owned(), 0)
+                            });
+                        let repository_id_for_click = *repository_id;
+                        let panel = panel.clone();
+
+                        v_flex()
+                            .w_full()
+                            .flex_none()
+                            .border_b_1()
+                            .border_color(cx.theme().colors().border)
+                            .child(
+                                h_flex()
+                                    .id(SharedString::from(format!(
+                                        "repository-section-{repository_id:?}"
+                                    )))
+                                    .h_8()
+                                    .px_2()
+                                    .gap_1()
+                                    .cursor_pointer()
+                                    .child(Icon::new(if collapsed {
+                                        IconName::ChevronRight
+                                    } else {
+                                        IconName::ChevronDown
+                                    }))
+                                    .child(Icon::new(IconName::GitBranch).color(Color::Muted))
+                                    .child(Label::new(name).truncate())
+                                    .child(Label::new(branch).color(Color::Muted).truncate())
+                                    .child(
+                                        Label::new(format!("{change_count}"))
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this
+                                            .collapsed_repositories
+                                            .remove(&repository_id_for_click)
+                                        {
+                                            this.collapsed_repositories
+                                                .insert(repository_id_for_click);
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .when(!collapsed, |this| {
+                                this.child(
+                                    div().h(px(620.)).w_full().overflow_hidden().child(panel),
+                                )
+                            })
+                    }),
+            )
+            .into_any_element()
     }
 }
 
 impl Render for GitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.repository_override.is_none()
+            && GitPanelSettings::get_global(cx).multi_repo
+            && self.repository_sections.len() > 1
+        {
+            return self.render_repository_sections(cx);
+        }
+
         let project = self.project.read(cx);
         let has_entries = !self.entries.is_empty();
         let has_write_access = self.has_write_access(cx);
@@ -9447,6 +9706,7 @@ impl Render for GitPanel {
                 )
                 .with_priority(1)
             }))
+            .into_any_element()
     }
 }
 

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::agent_connection_store::AgentConnectionStore;
 
+use crate::terminal_thread_metadata_store::{TerminalThreadMetadata, TerminalThreadMetadataStore};
 use crate::thread_metadata_store::{
     ThreadId, ThreadMetadata, ThreadMetadataStore, worktree_info_from_thread_paths,
 };
@@ -18,7 +19,7 @@ use editor::Editor;
 use fs::Fs;
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
-    AnyElement, App, Context, Decorations, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Anchor, AnyElement, App, Context, Decorations, DismissEvent, Entity, EventEmitter, FocusHandle,
     Focusable, ListState, Render, SharedString, Subscription, Task, TaskExt, WeakEntity, Window,
     list, prelude::*, px,
 };
@@ -33,8 +34,8 @@ use project::{AgentId, AgentServerStore};
 use settings::Settings as _;
 use theme::ActiveTheme;
 use ui::{
-    AgentThreadStatus, Divider, KeyBinding, ListItem, ListItemSpacing, ListSubHeader, ScrollAxes,
-    Scrollbars, Tab, ThreadItem, Tooltip, WithScrollbar, prelude::*,
+    AgentThreadStatus, ContextMenu, Divider, KeyBinding, ListItem, ListItemSpacing, ListSubHeader,
+    PopoverMenu, ScrollAxes, Scrollbars, Tab, ThreadItem, Tooltip, WithScrollbar, prelude::*,
     utils::platform_title_bar_height,
 };
 use util::ResultExt;
@@ -54,11 +55,24 @@ enum ThreadFilter {
     ArchivedOnly,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum HistoryFilter {
+    #[default]
+    All,
+    Agent(AgentId),
+    Terminals,
+}
+
 #[derive(Clone)]
 enum ArchiveListItem {
     BucketSeparator(TimeBucket),
+    TerminalSection,
     Entry {
         thread: ThreadMetadata,
+        highlight_positions: Vec<usize>,
+    },
+    Terminal {
+        metadata: TerminalThreadMetadata,
         highlight_positions: Vec<usize>,
     },
 }
@@ -131,6 +145,7 @@ pub fn fuzzy_match_positions(query: &str, candidate: &str) -> Option<Vec<usize>>
 pub enum ThreadsArchiveViewEvent {
     Close,
     Activate { thread: ThreadMetadata },
+    ActivateTerminal { terminal: TerminalThreadMetadata },
     CancelRestore { thread_id: ThreadId },
     Import,
     NewThread,
@@ -152,6 +167,9 @@ pub struct ThreadsArchiveView {
     workspace: WeakEntity<Workspace>,
     agent_connection_store: WeakEntity<AgentConnectionStore>,
     agent_server_store: WeakEntity<AgentServerStore>,
+    history_paths: Option<PathList>,
+    popover: bool,
+    history_filter: HistoryFilter,
     restoring: HashSet<ThreadId>,
     archived_thread_ids: HashSet<ThreadId>,
     archived_branch_names: HashMap<ThreadId, HashMap<PathBuf, String>>,
@@ -164,6 +182,8 @@ impl ThreadsArchiveView {
         workspace: WeakEntity<Workspace>,
         agent_connection_store: WeakEntity<AgentConnectionStore>,
         agent_server_store: WeakEntity<AgentServerStore>,
+        history_paths: Option<PathList>,
+        popover: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -202,6 +222,10 @@ impl ThreadsArchiveView {
                 this.reload_branch_names_if_threads_changed(cx);
             },
         );
+        let terminal_metadata_store_subscription = cx.observe(
+            &TerminalThreadMetadataStore::global(cx),
+            |this: &mut Self, _, cx| this.update_items(cx),
+        );
 
         cx.on_focus_out(&focus_handle, window, |this: &mut Self, _, _window, cx| {
             this.selection = None;
@@ -221,11 +245,15 @@ impl ThreadsArchiveView {
             _subscriptions: vec![
                 filter_editor_subscription,
                 thread_metadata_store_subscription,
+                terminal_metadata_store_subscription,
             ],
             _refresh_history_task: Task::ready(()),
             workspace,
             agent_connection_store,
             agent_server_store,
+            history_paths,
+            popover,
+            history_filter: HistoryFilter::All,
             restoring: HashSet::default(),
             archived_thread_ids: HashSet::default(),
             archived_branch_names: HashMap::default(),
@@ -281,8 +309,19 @@ impl ThreadsArchiveView {
         }
 
         let thread_filter = self.thread_filter;
+        let history_filter = self.history_filter.clone();
         let sessions = store
             .entries()
+            .filter(|thread| match &history_filter {
+                HistoryFilter::All => true,
+                HistoryFilter::Agent(agent) => thread.agent_id == *agent,
+                HistoryFilter::Terminals => false,
+            })
+            .filter(|thread| {
+                self.history_paths.as_ref().is_none_or(|paths| {
+                    thread.main_worktree_paths() == paths || thread.folder_paths() == paths
+                })
+            })
             .filter(|t| match thread_filter {
                 ThreadFilter::All => true,
                 ThreadFilter::ArchivedOnly => t.archived,
@@ -292,10 +331,33 @@ impl ThreadsArchiveView {
             .cloned()
             .collect::<Vec<_>>();
 
+        let terminals = if matches!(
+            history_filter,
+            HistoryFilter::All | HistoryFilter::Terminals
+        ) && thread_filter == ThreadFilter::All
+        {
+            let terminal_store = TerminalThreadMetadataStore::global(cx);
+            let mut terminals = terminal_store
+                .read(cx)
+                .entries()
+                .filter(|terminal| {
+                    self.history_paths.as_ref().is_none_or(|paths| {
+                        terminal.main_worktree_paths() == paths || terminal.folder_paths() == paths
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            terminals.sort_by_key(|terminal| terminal.created_at);
+            terminals.reverse();
+            terminals
+        } else {
+            Vec::new()
+        };
+
         let query = self.filter_editor.read(cx).text(cx).to_lowercase();
         let today = Local::now().naive_local().date();
 
-        let mut items = Vec::with_capacity(sessions.len() + 5);
+        let mut items = Vec::with_capacity(sessions.len() + terminals.len() + 6);
         let mut current_bucket: Option<TimeBucket> = None;
 
         for session in sessions {
@@ -343,6 +405,38 @@ impl ThreadsArchiveView {
 
             items.push(ArchiveListItem::Entry {
                 thread: session,
+                highlight_positions,
+            });
+        }
+
+        let mut terminal_section_added = false;
+        for terminal in terminals {
+            let highlight_positions = if query.is_empty() {
+                Vec::new()
+            } else {
+                let title = terminal.display_title();
+                if let Some(positions) = fuzzy_match_positions(&query, title.as_ref()) {
+                    positions
+                } else {
+                    let worktree_matched = terminal.folder_paths().paths().iter().any(|path| {
+                        path.as_path()
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| fuzzy_match_positions(&query, name).is_some())
+                    });
+                    if !worktree_matched {
+                        continue;
+                    }
+                    Vec::new()
+                }
+            };
+
+            if !terminal_section_added {
+                items.push(ArchiveListItem::TerminalSection);
+                terminal_section_added = true;
+            }
+            items.push(ArchiveListItem::Terminal {
+                metadata: terminal,
                 highlight_positions,
             });
         }
@@ -503,7 +597,10 @@ impl ThreadsArchiveView {
     }
 
     fn is_selectable_item(&self, ix: usize) -> bool {
-        matches!(self.items.get(ix), Some(ArchiveListItem::Entry { .. }))
+        matches!(
+            self.items.get(ix),
+            Some(ArchiveListItem::Entry { .. } | ArchiveListItem::Terminal { .. })
+        )
     }
 
     fn find_next_selectable(&self, start: usize) -> Option<usize> {
@@ -585,11 +682,17 @@ impl ThreadsArchiveView {
 
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.selection else { return };
-        let Some(ArchiveListItem::Entry { thread, .. }) = self.items.get(ix) else {
-            return;
-        };
-
-        self.unarchive_thread(thread.clone(), window, cx);
+        match self.items.get(ix) {
+            Some(ArchiveListItem::Entry { thread, .. }) => {
+                self.unarchive_thread(thread.clone(), window, cx);
+            }
+            Some(ArchiveListItem::Terminal { metadata, .. }) => {
+                cx.emit(ThreadsArchiveViewEvent::ActivateTerminal {
+                    terminal: metadata.clone(),
+                });
+            }
+            _ => {}
+        }
     }
 
     fn render_list_entry(
@@ -614,6 +717,59 @@ impl ThreadsArchiveView {
                         .color(Color::Muted),
                 )
                 .into_any_element(),
+            ArchiveListItem::TerminalSection => div()
+                .w_full()
+                .px_2p5()
+                .pt_3()
+                .pb_1()
+                .child(
+                    Label::new("Terminal Threads")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .into_any_element(),
+            ArchiveListItem::Terminal {
+                metadata,
+                highlight_positions,
+            } => {
+                let terminal = metadata.clone();
+                let is_focused = self.selection == Some(ix);
+                let is_hovered = self.hovered_index == Some(ix);
+                let timestamp = format_history_entry_timestamp(metadata.created_at);
+                let worktrees = worktree_info_from_thread_paths(
+                    &metadata.worktree_paths,
+                    &HashMap::<PathBuf, SharedString>::default(),
+                );
+
+                ThreadItem::new(
+                    SharedString::from(format!("archive-terminal-{ix}")),
+                    metadata.display_title(),
+                )
+                .icon(IconName::Terminal)
+                .timestamp(timestamp)
+                .highlight_positions(highlight_positions.clone())
+                .project_paths(metadata.folder_paths().paths_owned())
+                .worktrees(worktrees)
+                .focused(is_focused)
+                .hovered(is_hovered)
+                .on_hover(cx.listener(move |this, is_hovered, _window, cx| {
+                    let previously_hovered = this.hovered_index;
+                    this.hovered_index = if *is_hovered {
+                        Some(ix)
+                    } else {
+                        previously_hovered.filter(|&i| i != ix)
+                    };
+                    if this.hovered_index != previously_hovered {
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |_this, _, _, cx| {
+                    cx.emit(ThreadsArchiveViewEvent::ActivateTerminal {
+                        terminal: terminal.clone(),
+                    });
+                }))
+                .into_any_element()
+            }
             ArchiveListItem::Entry {
                 thread,
                 highlight_positions,
@@ -934,6 +1090,16 @@ impl ThreadsArchiveView {
             .when(right_window_controls, |this| {
                 this.children(Self::render_right_window_controls(window, cx))
             })
+            .when(self.popover, |this| {
+                this.child(
+                    IconButton::new("close-history", IconName::Close)
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text("Close Thread History"))
+                        .on_click(cx.listener(|_this, _, _, cx| {
+                            cx.emit(ThreadsArchiveViewEvent::Close);
+                        })),
+                )
+            })
     }
 
     fn render_left_window_controls(window: &Window, cx: &mut App) -> Option<AnyElement> {
@@ -952,12 +1118,92 @@ impl ThreadsArchiveView {
         )
     }
 
+    fn set_history_filter(&mut self, filter: HistoryFilter, cx: &mut Context<Self>) {
+        self.history_filter = filter;
+        if matches!(self.history_filter, HistoryFilter::Terminals) {
+            self.thread_filter = ThreadFilter::All;
+        }
+        self.update_items(cx);
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entry_count = self
             .items
             .iter()
-            .filter(|item| matches!(item, ArchiveListItem::Entry { .. }))
+            .filter(|item| {
+                matches!(
+                    item,
+                    ArchiveListItem::Entry { .. } | ArchiveListItem::Terminal { .. }
+                )
+            })
             .count();
+
+        let mut agents = ThreadMetadataStore::global(cx)
+            .read(cx)
+            .entries()
+            .map(|thread| thread.agent_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        agents.sort_unstable();
+
+        let filter_label: SharedString = match &self.history_filter {
+            HistoryFilter::All => "All chats".into(),
+            HistoryFilter::Agent(agent) => agent.0.clone(),
+            HistoryFilter::Terminals => "Terminals".into(),
+        };
+        let weak_view = cx.weak_entity();
+        let filter_menu = PopoverMenu::new("thread-history-filter")
+            .anchor(Anchor::BottomLeft)
+            .trigger_with_tooltip(
+                Button::new("thread-history-filter-trigger", filter_label)
+                    .size(ButtonSize::None)
+                    .label_size(LabelSize::Small),
+                |_, cx| Tooltip::simple("Filter chats", cx),
+            )
+            .menu(move |window, cx| {
+                let weak_view = weak_view.clone();
+                let agents = agents.clone();
+                Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
+                    menu = menu.entry("All chats", None, {
+                        let weak_view = weak_view.clone();
+                        move |_, cx| {
+                            weak_view
+                                .update(cx, |this, cx| {
+                                    this.set_history_filter(HistoryFilter::All, cx);
+                                })
+                                .log_err();
+                        }
+                    });
+                    menu = menu.entry("Terminals", None, {
+                        let weak_view = weak_view.clone();
+                        move |_, cx| {
+                            weak_view
+                                .update(cx, |this, cx| {
+                                    this.set_history_filter(HistoryFilter::Terminals, cx);
+                                })
+                                .log_err();
+                        }
+                    });
+                    if !agents.is_empty() {
+                        menu = menu.separator().header("Agents");
+                    }
+                    for agent in agents {
+                        let weak_view = weak_view.clone();
+                        menu = menu.entry(agent.0.clone(), None, move |_, cx| {
+                            weak_view
+                                .update(cx, |this, cx| {
+                                    this.set_history_filter(
+                                        HistoryFilter::Agent(agent.clone()),
+                                        cx,
+                                    );
+                                })
+                                .log_err();
+                        });
+                    }
+                    menu
+                }))
+            });
 
         let has_archived_threads = {
             let store = ThreadMetadataStore::global(cx).read(cx);
@@ -979,9 +1225,14 @@ impl ThreadsArchiveView {
             .border_b_1()
             .border_color(cx.theme().colors().border)
             .child(
-                Label::new(count_label)
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Label::new(count_label)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(filter_menu),
             )
             .child(
                 h_flex()
@@ -1111,7 +1362,17 @@ impl Render for ThreadsArchiveView {
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::remove_selected_thread))
             .on_action(cx.listener(Self::archive_selected_thread))
-            .size_full()
+            .when(self.popover, |this| {
+                this.w(px(620.))
+                    .h(px(560.))
+                    .max_w_full()
+                    .max_h(px(720.))
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .rounded_md()
+                    .bg(cx.theme().colors().panel_background)
+            })
+            .when(!self.popover, |this| this.size_full())
             .child(self.render_header(window, cx))
             .when(!has_query, |this| this.child(self.render_toolbar(cx)))
             .child(content)

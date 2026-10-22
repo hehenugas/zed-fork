@@ -76,7 +76,7 @@ use git_ui_core::worktree_service::{RemoteBranchName, worktree_create_targets};
 use zed_actions::editor::{MoveDown, MoveUp};
 use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, OpenRecent};
 
-use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
+use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadHistory, ToggleThreadSwitcher};
 
 use crate::thread_switcher::{
     ThreadSwitcher, ThreadSwitcherEntry, ThreadSwitcherEvent, ThreadSwitcherSelection,
@@ -91,8 +91,6 @@ gpui::actions!(
     [
         /// Creates a new thread in the currently selected or active project group.
         NewThreadInGroup,
-        /// Toggles between the thread list and the thread history.
-        ToggleThreadHistory,
     ]
 );
 
@@ -851,12 +849,18 @@ impl Sidebar {
 
         let mut previous_default_width =
             AgentSettings::get_global(cx).threads_sidebar.default_width;
+        let mut previous_scope = AgentSettings::get_global(cx).threads_sidebar.scope;
         cx.observe_global::<SettingsStore>(move |this, cx| {
             let width = AgentSettings::get_global(cx).threads_sidebar.default_width;
             if previous_default_width != width {
                 previous_default_width = width;
                 this.set_width(None, cx);
                 this.serialize(cx);
+            }
+            let scope = AgentSettings::get_global(cx).threads_sidebar.scope;
+            if previous_scope != scope {
+                previous_scope = scope;
+                this.schedule_update_entries(false, cx);
             }
         })
         .detach();
@@ -1446,7 +1450,13 @@ impl Sidebar {
             (icon, icon_from_external_svg)
         };
 
-        let groups = mw.project_groups(cx);
+        let mut groups = mw.project_groups(cx);
+        if AgentSettings::get_global(cx).threads_sidebar.scope
+            == settings::ThreadsSidebarScope::CurrentProject
+        {
+            let active_workspace = mw.workspace();
+            groups.retain(|group| group.workspaces.contains(active_workspace));
+        }
         let mut live_notified_terminal_ids: HashSet<TerminalId> = HashSet::new();
         for workspace in &workspaces {
             if let Some(agent_panel) = workspace.read(cx).panel::<AgentPanel>(cx) {
@@ -7715,16 +7725,26 @@ impl Sidebar {
         };
         telemetry::event!("Thread History Viewed", side = side);
 
-        let Some(active_workspace) = self
-            .multi_workspace
-            .upgrade()
-            .map(|w| w.read(cx).workspace().clone())
-        else {
+        let Some(multi_workspace) = self.multi_workspace.upgrade() else {
             return;
         };
+        let active_workspace = multi_workspace.read(cx).workspace().clone();
         let Some(agent_panel) = active_workspace.read(cx).panel::<AgentPanel>(cx) else {
             return;
         };
+
+        let settings = AgentSettings::get_global(cx).threads_sidebar;
+        let popover = settings.mode == settings::ThreadsSidebarMode::Popover;
+        let history_paths = (settings.scope == settings::ThreadsSidebarScope::CurrentProject)
+            .then(|| {
+                multi_workspace
+                    .read(cx)
+                    .project_groups(cx)
+                    .into_iter()
+                    .find(|group| group.workspaces.contains(&active_workspace))
+                    .map(|group| group.key.path_list().clone())
+            })
+            .flatten();
 
         let agent_server_store = active_workspace
             .read(cx)
@@ -7740,6 +7760,8 @@ impl Sidebar {
                 active_workspace.downgrade(),
                 agent_connection_store.clone(),
                 agent_server_store.clone(),
+                history_paths,
+                popover,
                 window,
                 cx,
             )
@@ -7754,6 +7776,9 @@ impl Sidebar {
                 }
                 ThreadsArchiveViewEvent::Activate { thread } => {
                     this.open_thread_from_archive(thread.clone(), window, cx);
+                }
+                ThreadsArchiveViewEvent::ActivateTerminal { terminal } => {
+                    this.open_terminal_from_archive(terminal.clone(), window, cx);
                 }
                 ThreadsArchiveViewEvent::CancelRestore { thread_id } => {
                     this.restoring_tasks.remove(thread_id);
@@ -7772,6 +7797,11 @@ impl Sidebar {
 
         self._subscriptions.push(subscription);
         self.view = SidebarView::Archive(archive_view.clone());
+        if popover {
+            multi_workspace.update(cx, |multi_workspace, cx| {
+                multi_workspace.set_sidebar_overlay(Some(archive_view.clone().into()), cx);
+            });
+        }
         archive_view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
         self.serialize(cx);
         cx.notify();
@@ -7780,10 +7810,49 @@ impl Sidebar {
     fn show_thread_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view = SidebarView::ThreadList;
         self._subscriptions.clear();
+        if AgentSettings::get_global(cx).threads_sidebar.mode
+            == settings::ThreadsSidebarMode::Popover
+            && let Some(multi_workspace) = self.multi_workspace.upgrade()
+        {
+            multi_workspace.update(cx, |multi_workspace, cx| {
+                multi_workspace.set_sidebar_overlay(None, cx);
+            });
+        }
         let handle = self.filter_editor.read(cx).focus_handle(cx);
         handle.focus(window, cx);
         self.serialize(cx);
         cx.notify();
+    }
+
+    fn open_terminal_from_archive(
+        &mut self,
+        metadata: TerminalThreadMetadata,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(multi_workspace) = self.multi_workspace.upgrade() else {
+            return;
+        };
+        let path_list = metadata.folder_paths().clone();
+        let project_group_key = ProjectGroupKey::from_worktree_paths(
+            &metadata.worktree_paths,
+            metadata.remote_connection.clone(),
+        );
+        let workspace = multi_workspace.read(cx).workspace_for_paths(
+            &path_list,
+            metadata.remote_connection.as_ref(),
+            cx,
+        );
+
+        self.show_thread_list(window, cx);
+        let workspace = workspace.map_or_else(
+            || ThreadEntryWorkspace::Closed {
+                folder_paths: path_list,
+                project_group_key,
+            },
+            ThreadEntryWorkspace::Open,
+        );
+        self.activate_terminal_entry(metadata, workspace, true, window, cx);
     }
 }
 
@@ -7890,6 +7959,10 @@ impl WorkspaceSidebar for Sidebar {
         cx: &mut Context<Self>,
     ) {
         self.toggle_thread_switcher_impl(select_last, window, cx);
+    }
+
+    fn toggle_thread_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_archive(&ToggleThreadHistory, window, cx);
     }
 
     fn cycle_project(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {

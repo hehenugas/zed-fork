@@ -17,7 +17,7 @@ use std::rc::Rc;
 use ui::prelude::*;
 use util::ResultExt;
 use util::path_list::PathList;
-use zed_actions::agents_sidebar::ToggleThreadSwitcher;
+use zed_actions::agents_sidebar::{ToggleThreadHistory, ToggleThreadSwitcher};
 
 use agent_settings::AgentSettings;
 use settings::SidebarDockPosition;
@@ -138,6 +138,8 @@ pub trait Sidebar: Focusable + Render + EventEmitter<SidebarEvent> + Sized {
     ) {
     }
 
+    fn toggle_thread_history(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
     /// Activates the next or previous project.
     fn cycle_project(&mut self, _forward: bool, _window: &mut Window, _cx: &mut Context<Self>) {}
 
@@ -169,6 +171,7 @@ pub trait SidebarHandle: 'static + Send + Sync {
     fn to_any(&self) -> AnyView;
     fn entity_id(&self) -> EntityId;
     fn toggle_thread_switcher(&self, select_last: bool, window: &mut Window, cx: &mut App);
+    fn toggle_thread_history(&self, window: &mut Window, cx: &mut App);
     fn cycle_project(&self, forward: bool, window: &mut Window, cx: &mut App);
     fn cycle_thread(&self, forward: bool, window: &mut Window, cx: &mut App);
 
@@ -227,6 +230,15 @@ impl<T: Sidebar> SidebarHandle for Entity<T> {
         window.defer(cx, move |window, cx| {
             entity.update(cx, |this, cx| {
                 this.toggle_thread_switcher(select_last, window, cx);
+            });
+        });
+    }
+
+    fn toggle_thread_history(&self, window: &mut Window, cx: &mut App) {
+        let entity = self.clone();
+        window.defer(cx, move |window, cx| {
+            entity.update(cx, |this, cx| {
+                this.toggle_thread_history(window, cx);
             });
         });
     }
@@ -333,7 +345,10 @@ impl MultiWorkspace {
 
     pub fn sidebar_render_state(&self, cx: &App) -> SidebarRenderState {
         SidebarRenderState {
-            open: self.sidebar_open() && self.multi_workspace_enabled(cx),
+            open: self.sidebar_open()
+                && self.multi_workspace_enabled(cx)
+                && AgentSettings::get_global(cx).threads_sidebar.mode
+                    == settings::ThreadsSidebarMode::Sidebar,
             side: self.sidebar_side(cx),
         }
     }
@@ -351,12 +366,18 @@ impl MultiWorkspace {
             let mut previous_multi_workspace_enabled = !DisableAiSettings::get_global(cx)
                 .disable_ai
                 && AgentSettings::get_global(cx).enabled;
+            let mut previous_sidebar_mode = AgentSettings::get_global(cx).threads_sidebar.mode;
             move |this, window, cx| {
                 let multi_workspace_enabled = this.multi_workspace_enabled(cx);
                 if previous_multi_workspace_enabled && !multi_workspace_enabled {
                     this.collapse_to_single_workspace(window, cx);
                 }
                 previous_multi_workspace_enabled = multi_workspace_enabled;
+                let sidebar_mode = AgentSettings::get_global(cx).threads_sidebar.mode;
+                if sidebar_mode != previous_sidebar_mode {
+                    previous_sidebar_mode = sidebar_mode;
+                    cx.notify();
+                }
             }
         });
         Self::subscribe_to_workspace(&workspace, window, cx);
@@ -1999,7 +2020,11 @@ impl Render for MultiWorkspace {
         let sidebar_side = self.sidebar_side(cx);
         let sidebar_on_right = sidebar_side == SidebarSide::Right;
 
-        let sidebar: Option<AnyElement> = if multi_workspace_enabled && self.sidebar_open() {
+        let sidebar: Option<AnyElement> = if multi_workspace_enabled
+            && self.sidebar_open()
+            && AgentSettings::get_global(cx).threads_sidebar.mode
+                == settings::ThreadsSidebarMode::Sidebar
+        {
             self.sidebar.as_ref().map(|sidebar_handle| {
                 let weak = cx.weak_entity();
 
@@ -2099,6 +2124,13 @@ impl Render for MultiWorkspace {
                         |this: &mut Self, action: &ToggleThreadSwitcher, window, cx| {
                             if let Some(sidebar) = &this.sidebar {
                                 sidebar.toggle_thread_switcher(action.select_last, window, cx);
+                            }
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |this: &mut Self, _: &ToggleThreadHistory, window, cx| {
+                            if let Some(sidebar) = &this.sidebar {
+                                sidebar.toggle_thread_history(window, cx);
                             }
                         },
                     ))

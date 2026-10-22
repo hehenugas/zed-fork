@@ -36,9 +36,65 @@ pub enum SidebarDockPosition {
     Right,
 }
 
+/// How agent thread history is opened.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadsSidebarMode {
+    /// Keep the persistent threads sidebar.
+    Sidebar,
+    /// Open thread history from the agent panel toolbar.
+    #[default]
+    Popover,
+}
+
+/// Which project groups appear in the threads sidebar and history.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadsSidebarScope {
+    /// Show threads from every project.
+    All,
+    /// Show threads for the active project group.
+    #[default]
+    CurrentProject,
+}
+
 #[with_fallible_options]
 #[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, Default)]
 pub struct ThreadsSidebarSettingsContent {
+    /// Whether to show a persistent sidebar or open thread history from the agent panel.
+    ///
+    /// Default: popover
+    pub mode: Option<ThreadsSidebarMode>,
+    /// Which project groups to show in the threads list and history.
+    ///
+    /// Default: current_project
+    pub scope: Option<ThreadsSidebarScope>,
     /// Whether opening a folder in an existing window automatically opens the
     /// Threads Sidebar. Applies when `default_open_behavior` or
     /// `cli_default_open_behavior` is set to `existing_window`.
