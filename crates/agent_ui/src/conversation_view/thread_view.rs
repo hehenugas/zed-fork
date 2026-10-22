@@ -4999,10 +4999,10 @@ impl ThreadView {
                     .flex_grow_0()
                     .justify_between()
                     .gap_2()
-                    .rounded_md()
+                    .rounded_lg()
                     .border_1()
                     .border_color(cx.theme().colors().border_variant)
-                    .bg(editor_bg_color)
+                    .bg(cx.theme().colors().element_background)
                     .px_3()
                     .py_2()
                     .child(
@@ -5010,6 +5010,7 @@ impl ThreadView {
                             .relative()
                             .w_full()
                             .min_h_0()
+                            .min_h(rems_from_px(52.0_f32))
                             .when(fills_container, |this| this.flex_1())
                             .pt_1()
                             .pr_2p5()
@@ -5355,20 +5356,16 @@ impl ThreadView {
                     .items_center()
                     .gap_3()
                     .child(
-                        div()
-                            .p_3()
-                            .rounded_lg()
-                            .bg(cx.theme().colors().element_background)
-                            .child(
-                                Icon::new(IconName::ZedAssistant)
-                                    .size(IconSize::XLarge)
-                                    .color(Color::Accent),
-                            ),
-                    )
-                    .child(Label::new("What would you like to work on?").size(LabelSize::Large))
-                    .child(
-                        Label::new("Ask a question, describe a task, or add context with #.")
+                        Label::new("NEW CONVERSATION")
+                            .size(LabelSize::XSmall)
                             .color(Color::Muted),
+                    )
+                    .child(Label::new("Start a conversation").size(LabelSize::Large))
+                    .child(
+                        Label::new(
+                            "Ask about this project, investigate an issue, or describe a change.",
+                        )
+                        .color(Color::Muted),
                     )
                     .child(suggestions),
             )
@@ -6917,40 +6914,40 @@ impl ThreadView {
                     .child(
                         div()
                             .relative()
-                            .child(
-                                div()
-                                    .py_3()
-                                    .px_2()
-                                    .rounded_md()
-                                    .bg(cx.theme().colors().editor_background)
-                                    .border_1()
-                                    .when(is_indented, |this| {
-                                        this.py_2().px_2().when(opaque_window, |this| {
-                                            this.shadow_sm()
-                                        })
+                            .w_full()
+                            .max_w(rems_from_px(720.0_f32))
+                            .ml_auto()
+                            .py_3()
+                            .px_3()
+                            .rounded_lg()
+                            .bg(cx.theme().colors().element_background)
+                            .border_1()
+                            .when(is_indented, |this| {
+                                this.py_2().px_2().when(opaque_window, |this| {
+                                    this.shadow_sm()
+                                })
+                            })
+                            .border_color(cx.theme().colors().border_variant)
+                            .map(|this| {
+                                if !is_editable {
+                                    if is_subagent {
+                                        return this.border_dashed();
+                                    }
+                                    return this;
+                                }
+                                if editing && editor_focus {
+                                    return this.border_color(focus_border);
+                                }
+                                if editing && !editor_focus {
+                                    return this.border_dashed()
+                                }
+                                this.when(opaque_window, |this| this.shadow_md())
+                                    .hover(|s| {
+                                        s.border_color(focus_border.opacity(0.8))
                                     })
-                                    .border_color(cx.theme().colors().border)
-                                    .map(|this| {
-                                        if !is_editable {
-                                            if is_subagent {
-                                                return this.border_dashed();
-                                            }
-                                            return this;
-                                        }
-                                        if editing && editor_focus {
-                                            return this.border_color(focus_border);
-                                        }
-                                        if editing && !editor_focus {
-                                            return this.border_dashed()
-                                        }
-                                        this.when(opaque_window, |this| this.shadow_md())
-                                            .hover(|s| {
-                                                s.border_color(focus_border.opacity(0.8))
-                                            })
-                                    })
-                                    .text_xs()
-                                    .child(editor.clone().into_any_element())
-                            )
+                            })
+                            .text_sm()
+                            .child(editor.clone().into_any_element())
                             .when(editor_focus, |this| {
                                 let base_container = h_flex()
                                     .absolute()
@@ -7081,10 +7078,12 @@ impl ThreadView {
                     Empty.into_any()
                 } else {
                     v_flex()
-                        .px_5()
-                        .py_1p5()
+                        .px_6()
+                        .py_2()
                         .when(is_last, |this| this.pb_4())
                         .w_full()
+                        .max_w(rems_from_px(860.0_f32))
+                        .mx_auto()
                         .text_ui(cx)
                         .child(message_body)
                         .when_some(
@@ -8164,15 +8163,30 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> Div {
-        v_flex().w_full().gap_3().children(
+        let mut markdown_style = MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+        markdown_style.paragraph_spacing = px(10.0);
+        markdown_style.paragraph_line_height = relative(1.55);
+        markdown_style.list_spacing = px(6.0);
+        let code_radius = gpui::AbsoluteLength::Pixels(px(8.0));
+        markdown_style.code_block.corner_radii.top_left = Some(code_radius);
+        markdown_style.code_block.corner_radii.top_right = Some(code_radius);
+        markdown_style.code_block.corner_radii.bottom_left = Some(code_radius);
+        markdown_style.code_block.corner_radii.bottom_right = Some(code_radius);
+
+        v_flex().w_full().gap_4().children(
             content
                 .blocks()
                 .enumerate()
                 .filter(|(_, block)| block.visible_content(cx))
                 .map(|(block_ix, block)| {
-                    let content = self.render_output_content_block(
-                        entry_ix, block_ix, block, None, false, window, cx,
-                    );
+                    let content = if let Some(markdown) = block.markdown() {
+                        self.render_markdown(markdown.clone(), markdown_style.clone(), cx)
+                            .into_any()
+                    } else {
+                        self.render_output_content_block(
+                            entry_ix, block_ix, block, None, false, window, cx,
+                        )
+                    };
                     div()
                         .id(("message-content-block", block_ix))
                         .debug_selector(move || {
@@ -8710,7 +8724,7 @@ impl ThreadView {
                     .border_1()
                     .when(tool_failed || command_failed, |card| card.border_dashed())
                     .border_color(border_color)
-                    .rounded_md()
+                    .rounded_lg()
             })
             .overflow_hidden()
             .child(header)
@@ -9377,11 +9391,11 @@ impl ThreadView {
                     this
                 } else if use_card_layout {
                     this.my_1p5()
-                        .rounded_md()
+                        .rounded_lg()
                         .border_1()
                         .when(failed_or_canceled, |this| this.border_dashed())
                         .border_color(self.tool_card_border_color(cx))
-                        .bg(cx.theme().colors().editor_background)
+                        .bg(cx.theme().colors().element_background)
                         .overflow_hidden()
                 } else {
                     this.my_1()
