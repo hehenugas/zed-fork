@@ -1119,6 +1119,7 @@ impl VsCodeSettings {
             zoomed_padding: None,
             focus_follows_mouse: None,
             activity_bar: None,
+            island_layout: None,
         }
     }
 

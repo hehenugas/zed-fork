@@ -6794,7 +6794,7 @@ impl GitPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
-        if matches!(self.git_access, Some(GitAccess::No)) {
+        if matches!(self.git_access, Some(GitAccess::No)) || self.repository_override.is_some() {
             return None;
         }
 
@@ -9532,9 +9532,24 @@ impl GitPanel {
                                     } else {
                                         IconName::ChevronDown
                                     }))
-                                    .child(Icon::new(IconName::GitBranch).color(Color::Muted))
+                                    .child(Icon::new(IconName::FileGit).color(Color::Muted))
                                     .child(Label::new(name).truncate())
-                                    .child(Label::new(branch).color(Color::Muted).truncate())
+                                    .child(
+                                        h_flex()
+                                            .gap_0p5()
+                                            .min_w_0()
+                                            .child(
+                                                Icon::new(IconName::GitBranch)
+                                                    .size(IconSize::XSmall)
+                                                    .color(Color::Muted),
+                                            )
+                                            .child(
+                                                Label::new(branch)
+                                                    .size(LabelSize::Small)
+                                                    .color(Color::Muted)
+                                                    .truncate(),
+                                            ),
+                                    )
                                     .child(
                                         Label::new(format!("{change_count}"))
                                             .size(LabelSize::Small)
@@ -9664,9 +9679,10 @@ impl Render for GitPanel {
             .child(
                 v_flex()
                     .size_full()
-                    .when(!self.commit_editor_expanded, |this| {
-                        this.child(self.render_tab_bar(cx))
-                    })
+                    .when(
+                        !self.commit_editor_expanded && self.repository_override.is_none(),
+                        |this| this.child(self.render_tab_bar(cx)),
+                    )
                     .map(|this| match self.active_tab {
                         GitPanelTab::Changes => this
                             .children(self.render_changes_header(window, cx))

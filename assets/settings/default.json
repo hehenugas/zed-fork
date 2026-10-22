@@ -333,6 +333,9 @@
   // Show panel buttons in a vertical activity bar on the window edges
   // instead of in the status bar.
   "activity_bar": false,
+  // Render the docks and the editor area as separate rounded panels
+  // with gaps between them.
+  "island_layout": true,
   // Determines how snippets are sorted relative to other completion items.
   //
   // 1. Place snippets at the top of the completion list:
@@ -1185,6 +1188,9 @@
     "threads_sidebar": {
       // Where to position the Threads Sidebar. Can be 'left' or 'right'.
       "position": "left",
+      // Which projects the Threads Sidebar and thread history show.
+      // Can be 'current_project' (active workspace only) or 'all'.
+      "scope": "current_project",
       // Default width of the Threads Sidebar.
       "default_width": 300,
       // Automatically open the Threads Sidebar when opening a folder in an existing window.

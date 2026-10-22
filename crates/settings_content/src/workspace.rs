@@ -177,6 +177,11 @@ pub struct WorkspaceSettingsContent {
     ///
     /// Default: false
     pub activity_bar: Option<bool>,
+    /// Render the docks and the editor area as separate rounded panels with
+    /// gaps between them.
+    ///
+    /// Default: true
+    pub island_layout: Option<bool>,
 }
 
 #[with_fallible_options]

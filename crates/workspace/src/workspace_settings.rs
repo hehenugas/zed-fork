@@ -47,6 +47,7 @@ pub struct WorkspaceSettings {
     pub window_decorations: settings::WindowDecorations,
     pub focus_follows_mouse: FocusFollowsMouse,
     pub activity_bar: bool,
+    pub island_layout: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -166,6 +167,7 @@ impl Settings for WorkspaceSettings {
                 ),
             },
             activity_bar: workspace.activity_bar.unwrap(),
+            island_layout: workspace.island_layout.unwrap(),
         }
     }
 }

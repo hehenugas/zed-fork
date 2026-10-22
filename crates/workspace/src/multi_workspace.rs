@@ -345,10 +345,7 @@ impl MultiWorkspace {
 
     pub fn sidebar_render_state(&self, cx: &App) -> SidebarRenderState {
         SidebarRenderState {
-            open: self.sidebar_open()
-                && self.multi_workspace_enabled(cx)
-                && AgentSettings::get_global(cx).threads_sidebar.mode
-                    == settings::ThreadsSidebarMode::Sidebar,
+            open: self.sidebar_open() && self.multi_workspace_enabled(cx),
             side: self.sidebar_side(cx),
         }
     }
@@ -366,16 +363,16 @@ impl MultiWorkspace {
             let mut previous_multi_workspace_enabled = !DisableAiSettings::get_global(cx)
                 .disable_ai
                 && AgentSettings::get_global(cx).enabled;
-            let mut previous_sidebar_mode = AgentSettings::get_global(cx).threads_sidebar.mode;
+            let mut previous_sidebar_scope = AgentSettings::get_global(cx).threads_sidebar.scope;
             move |this, window, cx| {
                 let multi_workspace_enabled = this.multi_workspace_enabled(cx);
                 if previous_multi_workspace_enabled && !multi_workspace_enabled {
                     this.collapse_to_single_workspace(window, cx);
                 }
                 previous_multi_workspace_enabled = multi_workspace_enabled;
-                let sidebar_mode = AgentSettings::get_global(cx).threads_sidebar.mode;
-                if sidebar_mode != previous_sidebar_mode {
-                    previous_sidebar_mode = sidebar_mode;
+                let sidebar_scope = AgentSettings::get_global(cx).threads_sidebar.scope;
+                if sidebar_scope != previous_sidebar_scope {
+                    previous_sidebar_scope = sidebar_scope;
                     cx.notify();
                 }
             }
@@ -2022,11 +2019,7 @@ impl Render for MultiWorkspace {
         let sidebar_side = self.sidebar_side(cx);
         let sidebar_on_right = sidebar_side == SidebarSide::Right;
 
-        let sidebar: Option<AnyElement> = if multi_workspace_enabled
-            && self.sidebar_open()
-            && AgentSettings::get_global(cx).threads_sidebar.mode
-                == settings::ThreadsSidebarMode::Sidebar
-        {
+        let sidebar: Option<AnyElement> = if multi_workspace_enabled && self.sidebar_open() {
             self.sidebar.as_ref().map(|sidebar_handle| {
                 let weak = cx.weak_entity();
 

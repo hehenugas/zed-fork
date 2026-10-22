@@ -24,9 +24,6 @@ use agent_ui::{
 use agent_ui::{MessageEditorEvent, StateChange, thread_worktree_archive};
 use chrono::{DateTime, Utc};
 use editor::Editor;
-use feature_flags::{
-    AgentThreadWorktreeLabel, AgentThreadWorktreeLabelFlag, FeatureFlag, FeatureFlagAppExt as _,
-};
 use gpui::{
     Action as _, AnyElement, App, ClickEvent, Context, Decorations, DismissEvent, Entity, EntityId,
     FocusHandle, Focusable, KeyContext, ListState, Modifiers, Pixels, Render, SharedString, Task,
@@ -392,6 +389,8 @@ impl ThreadEntry {
     }
 }
 
+const COLLAPSED_ROW_LIMIT: usize = 5;
+
 #[derive(Clone)]
 enum ListEntry {
     ProjectHeader {
@@ -406,6 +405,11 @@ enum ListEntry {
     },
     Thread(Arc<ThreadEntry>),
     Terminal(TerminalEntry),
+    ShowMore {
+        key: ProjectGroupKey,
+        hidden_count: usize,
+        expanded: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -425,7 +429,7 @@ impl RenameTarget {
                 Self::Terminal(terminal.metadata.terminal_id),
                 terminal.metadata.editable_title(),
             )),
-            ListEntry::ProjectHeader { .. } => None,
+            ListEntry::ProjectHeader { .. } | ListEntry::ShowMore { .. } => None,
         }
     }
 }
@@ -451,7 +455,7 @@ impl ActivatableEntry {
                 metadata: terminal.metadata.clone(),
                 workspace: terminal.workspace.clone(),
             }),
-            ListEntry::ProjectHeader { .. } => None,
+            ListEntry::ProjectHeader { .. } | ListEntry::ShowMore { .. } => None,
         }
     }
 }
@@ -461,7 +465,9 @@ impl ListEntry {
     fn session_id(&self) -> Option<&acp::SessionId> {
         match self {
             ListEntry::Thread(thread_entry) => thread_entry.metadata.session_id.as_ref(),
-            ListEntry::Terminal(_) | ListEntry::ProjectHeader { .. } => None,
+            ListEntry::Terminal(_) | ListEntry::ProjectHeader { .. } | ListEntry::ShowMore { .. } => {
+                None
+            }
         }
     }
 
@@ -479,7 +485,7 @@ impl ListEntry {
                 ThreadEntryWorkspace::Open(workspace) => vec![workspace.clone()],
                 ThreadEntryWorkspace::Closed { .. } => Vec::new(),
             },
-            ListEntry::ProjectHeader { key, .. } => {
+            ListEntry::ProjectHeader { key, .. } | ListEntry::ShowMore { key, .. } => {
                 multi_workspace.workspaces_for_project_group(key, cx)
             }
         }
@@ -522,6 +528,10 @@ enum EntryShape {
     },
     Thread(ThreadId),
     Terminal(TerminalId),
+    ShowMore {
+        key: ProjectGroupKey,
+        expanded: bool,
+    },
 }
 
 impl SidebarContents {
@@ -700,30 +710,6 @@ fn workspace_menu_worktree_labels(
         .collect()
 }
 
-fn apply_worktree_label_mode(
-    mut worktrees: Vec<ThreadItemWorktreeInfo>,
-    mode: AgentThreadWorktreeLabel,
-) -> Vec<ThreadItemWorktreeInfo> {
-    match mode {
-        AgentThreadWorktreeLabel::Both => {}
-        AgentThreadWorktreeLabel::Worktree => {
-            for wt in &mut worktrees {
-                wt.branch_name = None;
-            }
-        }
-        AgentThreadWorktreeLabel::Branch => {
-            for wt in &mut worktrees {
-                // Fall back to showing the worktree name when no branch is
-                // known; an empty chip would be worse than a mismatched icon.
-                if wt.branch_name.is_some() {
-                    wt.worktree_name = None;
-                }
-            }
-        }
-    }
-    worktrees
-}
-
 /// Shows a [`RemoteConnectionModal`] on the given workspace and establishes
 /// an SSH connection. Suitable for passing to
 /// [`MultiWorkspace::find_or_create_workspace`] as the `connect_remote`
@@ -790,6 +776,8 @@ pub struct Sidebar {
     /// Tracks which sidebar entry is currently active (highlighted).
     active_entry: Option<ActiveEntry>,
     hovered_thread_index: Option<usize>,
+    /// Project groups showing every row; reset on restart so groups start truncated.
+    expanded_row_groups: HashSet<ProjectGroupKey>,
     rename_target: Option<RenameTarget>,
     /// Threads in the database-backed regeneration path need their own loading
     /// state because they do not have a live `agent::Thread` to report it.
@@ -844,8 +832,6 @@ impl Sidebar {
         let focus_handle = cx.focus_handle();
         cx.on_focus_in(&focus_handle, window, Self::focus_in)
             .detach();
-
-        AgentThreadWorktreeLabelFlag::watch(cx);
 
         let mut previous_default_width =
             AgentSettings::get_global(cx).threads_sidebar.default_width;
@@ -960,6 +946,7 @@ impl Sidebar {
             selection: None,
             active_entry: None,
             hovered_thread_index: None,
+            expanded_row_groups: HashSet::new(),
             rename_target: None,
             regenerating_titles: HashSet::new(),
             suppress_next_rename_edit: false,
@@ -2012,6 +1999,7 @@ impl Sidebar {
                     continue;
                 }
 
+                let first_row_ix = entries.len();
                 Self::push_entries_by_display_time(
                     &mut entries,
                     terminals,
@@ -2019,6 +2007,18 @@ impl Sidebar {
                     &mut current_session_ids,
                     &mut current_thread_ids,
                 );
+                let row_count = entries.len() - first_row_ix;
+                if row_count > COLLAPSED_ROW_LIMIT {
+                    let expanded = self.expanded_row_groups.contains(&group_key);
+                    if !expanded {
+                        entries.truncate(first_row_ix + COLLAPSED_ROW_LIMIT);
+                    }
+                    entries.push(ListEntry::ShowMore {
+                        key: group_key.clone(),
+                        hidden_count: row_count - COLLAPSED_ROW_LIMIT,
+                        expanded,
+                    });
+                }
             }
         }
 
@@ -2136,6 +2136,10 @@ impl Sidebar {
             },
             ListEntry::Thread(thread) => EntryShape::Thread(thread.metadata.thread_id),
             ListEntry::Terminal(terminal) => EntryShape::Terminal(terminal.metadata.terminal_id),
+            ListEntry::ShowMore { key, expanded, .. } => EntryShape::ShowMore {
+                key: key.clone(),
+                expanded: *expanded,
+            },
         })
     }
 
@@ -2287,6 +2291,11 @@ impl Sidebar {
             ListEntry::Terminal(terminal) => {
                 self.render_terminal(ix, terminal, is_active, is_selected, cx)
             }
+            ListEntry::ShowMore {
+                key,
+                hidden_count,
+                expanded,
+            } => self.render_show_more(ix, key, *hidden_count, *expanded, is_selected, cx),
         };
 
         if is_group_header_after_first {
@@ -2299,6 +2308,48 @@ impl Sidebar {
         } else {
             rendered
         }
+    }
+
+    fn render_show_more(
+        &self,
+        ix: usize,
+        key: &ProjectGroupKey,
+        hidden_count: usize,
+        expanded: bool,
+        is_focused: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = key.clone();
+        let label = if expanded {
+            "Show less".to_string()
+        } else {
+            format!("Show more ({hidden_count})")
+        };
+        let color = cx.theme().colors();
+
+        h_flex()
+            .id(("show-more", ix))
+            .cursor_pointer()
+            .w_full()
+            .h_6()
+            .pl(px(30.))
+            .border_1()
+            .border_r_2()
+            .border_color(if is_focused {
+                color.panel_focused_border
+            } else {
+                gpui::transparent_black()
+            })
+            .hover(|style| style.bg(color.ghost_element_hover))
+            .child(
+                Label::new(label)
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                this.toggle_row_limit(&key, cx);
+            }))
+            .into_any_element()
     }
 
     fn render_remote_project_icon(
@@ -2349,10 +2400,10 @@ impl Sidebar {
         let group_name = SharedString::from(format!("{id_prefix}header-group-{ix}"));
 
         let is_collapsed = self.is_group_collapsed(key, cx);
-        let disclosure_icon = if is_collapsed {
-            IconName::ChevronRight
+        let folder_icon = if is_collapsed {
+            IconName::Folder
         } else {
-            IconName::ChevronDown
+            IconName::FolderOpen
         };
 
         let key_for_toggle = key.clone();
@@ -2427,7 +2478,12 @@ impl Sidebar {
                     .relative()
                     .min_w_0()
                     .w_full()
-                    .gap_1()
+                    .gap_2()
+                    .child(
+                        Icon::new(folder_icon)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
                     .child(label)
                     .when_some(
                         self.render_remote_project_icon(ix, host.as_ref()),
@@ -2472,17 +2528,7 @@ impl Sidebar {
                             },
                         )
                     })
-                    .when(!has_filter, |this| {
-                        this.child(
-                            div()
-                                .when(!is_focused, |this| this.visible_on_hover(&group_name))
-                                .child(
-                                    Icon::new(disclosure_icon)
-                                        .size(IconSize::Small)
-                                        .color(Color::Muted),
-                                ),
-                        )
-                    }),
+                    ,
             )
             .children(opaque_window.then(|| gradient_overlay()))
             .child(
@@ -3690,7 +3736,18 @@ impl Sidebar {
                 let workspace = terminal.workspace.clone();
                 self.activate_terminal_entry(metadata, workspace, false, window, cx);
             }
+            ListEntry::ShowMore { key, .. } => {
+                let key = key.clone();
+                self.toggle_row_limit(&key, cx);
+            }
         }
+    }
+
+    fn toggle_row_limit(&mut self, key: &ProjectGroupKey, cx: &mut Context<Self>) {
+        if !self.expanded_row_groups.remove(key) {
+            self.expanded_row_groups.insert(key.clone());
+        }
+        self.update_entries(cx);
     }
 
     fn find_workspace_across_windows(
@@ -4420,7 +4477,7 @@ impl Sidebar {
                     self.update_entries(cx);
                 }
             }
-            Some(ListEntry::Thread(_) | ListEntry::Terminal(_)) => {
+            Some(ListEntry::Thread(_) | ListEntry::Terminal(_) | ListEntry::ShowMore { .. }) => {
                 for i in (0..ix).rev() {
                     if let Some(ListEntry::ProjectHeader { key, .. }) = self.contents.entries.get(i)
                     {
@@ -4447,7 +4504,7 @@ impl Sidebar {
         // Find the group header for the current selection.
         let header_ix = match self.contents.entries.get(ix) {
             Some(ListEntry::ProjectHeader { .. }) => Some(ix),
-            Some(ListEntry::Thread(_) | ListEntry::Terminal(_)) => (0..ix).rev().find(|&i| {
+            Some(ListEntry::Thread(_) | ListEntry::Terminal(_) | ListEntry::ShowMore { .. }) => (0..ix).rev().find(|&i| {
                 matches!(
                     self.contents.entries.get(i),
                     Some(ListEntry::ProjectHeader { .. })
@@ -5854,7 +5911,7 @@ impl Sidebar {
                 }
                 ListEntry::Thread(thread) => Sidebar::thread_display_time(&thread.metadata),
                 ListEntry::Terminal(terminal) => terminal.metadata.created_at,
-                ListEntry::ProjectHeader { .. } => unreachable!(),
+                ListEntry::ProjectHeader { .. } | ListEntry::ShowMore { .. } => unreachable!(),
             }
         }
 
@@ -5958,6 +6015,7 @@ impl Sidebar {
                         timestamp,
                     }))
                 }
+                ListEntry::ShowMore { .. } => None,
                 ListEntry::Terminal(terminal) => {
                     let timestamp: SharedString =
                         format_history_entry_timestamp(terminal.metadata.created_at).into();
@@ -6275,7 +6333,6 @@ impl Sidebar {
         let is_hovered = self.hovered_thread_index == Some(ix);
         let is_selected = is_active;
         let is_draft = thread.draft.is_some();
-        let is_empty_draft = thread.draft == Some(DraftKind::Empty);
         let is_running = matches!(
             thread.status,
             AgentThreadStatus::Running | AgentThreadStatus::WaitingForConfirmation
@@ -6295,18 +6352,7 @@ impl Sidebar {
         let button_hover_bg = color.element_background;
         let button_active_bg = color.element_active;
 
-        let timestamp: SharedString = if is_empty_draft {
-            SharedString::default()
-        } else {
-            format_history_entry_timestamp(Self::thread_display_time(&thread.metadata)).into()
-        };
-
         let is_remote = thread.workspace.is_remote(cx);
-
-        let worktrees = apply_worktree_label_mode(
-            thread.worktrees.clone(),
-            cx.flag_value::<AgentThreadWorktreeLabelFlag>(),
-        );
 
         let (icon, icon_svg) = if is_draft {
             (IconName::Circle, None)
@@ -6330,17 +6376,9 @@ impl Sidebar {
             .when_some(icon_svg, |this, svg| {
                 this.custom_icon_from_external_svg(svg)
             })
-            .worktrees(worktrees)
-            .timestamp(timestamp)
             .highlight_positions(thread.highlight_positions.to_vec())
             .title_generating(title_generating)
             .notified(has_notification)
-            .when(thread.diff_stats.lines_added > 0, |this| {
-                this.added(thread.diff_stats.lines_added as usize)
-            })
-            .when(thread.diff_stats.lines_removed > 0, |this| {
-                this.removed(thread.diff_stats.lines_removed as usize)
-            })
             .selected(is_selected)
             .focused(is_focused)
             .hovered(is_hovered)
@@ -6617,7 +6655,6 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = ElementId::from(format!("terminal-{}", terminal.metadata.terminal_id));
-        let timestamp = format_history_entry_timestamp(terminal.metadata.created_at);
         let is_hovered = self.hovered_thread_index == Some(ix);
         let color = cx.theme().colors();
         let sidebar_bg = color.panel_background;
@@ -6626,10 +6663,6 @@ impl Sidebar {
         let metadata = terminal.metadata.clone();
         let workspace = terminal.workspace.clone();
         let focus_handle = self.focus_handle.clone();
-        let worktrees = apply_worktree_label_mode(
-            terminal.worktrees.clone(),
-            cx.flag_value::<AgentThreadWorktreeLabelFlag>(),
-        );
         let is_remote = terminal.workspace.is_remote(cx);
         let is_renaming =
             self.rename_target == Some(RenameTarget::Terminal(terminal.metadata.terminal_id));
@@ -6647,8 +6680,6 @@ impl Sidebar {
             .icon(IconName::Terminal)
             .when_some(icon_char, |this, icon_char| this.icon_char(icon_char))
             .is_remote(is_remote)
-            .worktrees(worktrees)
-            .timestamp(timestamp)
             .notified(terminal.has_notification)
             .highlight_positions(highlight_positions)
             .selected(is_active)
@@ -7313,7 +7344,7 @@ impl Sidebar {
                 let workspace = terminal.workspace.clone();
                 self.activate_terminal_entry(metadata, workspace, true, window, cx);
             }
-            ListEntry::ProjectHeader { .. } => {}
+            ListEntry::ProjectHeader { .. } | ListEntry::ShowMore { .. } => {}
         }
     }
 
@@ -7734,7 +7765,6 @@ impl Sidebar {
         };
 
         let settings = AgentSettings::get_global(cx).threads_sidebar;
-        let popover = settings.mode == settings::ThreadsSidebarMode::Popover;
         let history_paths = (settings.scope == settings::ThreadsSidebarScope::CurrentProject)
             .then(|| {
                 multi_workspace
@@ -7761,7 +7791,7 @@ impl Sidebar {
                 agent_connection_store.clone(),
                 agent_server_store.clone(),
                 history_paths,
-                popover,
+                true,
                 window,
                 cx,
             )
@@ -7797,11 +7827,9 @@ impl Sidebar {
 
         self._subscriptions.push(subscription);
         self.view = SidebarView::Archive(archive_view.clone());
-        if popover {
-            multi_workspace.update(cx, |multi_workspace, cx| {
-                multi_workspace.set_sidebar_overlay(Some(archive_view.clone().into()), cx);
-            });
-        }
+        multi_workspace.update(cx, |multi_workspace, cx| {
+            multi_workspace.set_sidebar_overlay(Some(archive_view.clone().into()), cx);
+        });
         archive_view.update(cx, |view, cx| view.focus_filter_editor(window, cx));
         self.serialize(cx);
         cx.notify();
@@ -7810,10 +7838,7 @@ impl Sidebar {
     fn show_thread_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view = SidebarView::ThreadList;
         self._subscriptions.clear();
-        if AgentSettings::get_global(cx).threads_sidebar.mode
-            == settings::ThreadsSidebarMode::Popover
-            && let Some(multi_workspace) = self.multi_workspace.upgrade()
-        {
+        if let Some(multi_workspace) = self.multi_workspace.upgrade() {
             multi_workspace.update(cx, |multi_workspace, cx| {
                 multi_workspace.set_sidebar_overlay(None, cx);
             });

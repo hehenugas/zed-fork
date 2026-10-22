@@ -8726,6 +8726,7 @@ impl Workspace {
     }
 
     const ACTIVITY_BAR_WIDTH: Pixels = px(40.);
+    const ISLAND_MARGIN: Pixels = px(4.);
 
     fn render_activity_bar(&self, side: DockPosition, cx: &App) -> Option<Div> {
         let colors = cx.theme().colors();
@@ -8800,6 +8801,16 @@ impl Workspace {
             .flex()
             .overflow_hidden()
             .flex_none()
+            .when(WorkspaceSettings::get_global(cx).island_layout, |this| {
+                let this = match position {
+                    DockPosition::Left => this.mr(Self::ISLAND_MARGIN),
+                    DockPosition::Right => this.ml(Self::ISLAND_MARGIN),
+                    DockPosition::Bottom => this.mt(Self::ISLAND_MARGIN),
+                };
+                this.rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().colors().border_variant)
+            })
             .child(dock.clone())
             .children(leader_border);
 
@@ -8999,10 +9010,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
+        let island_layout = WorkspaceSettings::get_global(cx).island_layout;
         div()
             .id("editor-region")
             .role(gpui::Role::Main)
             .aria_label("Editor")
+            .when(island_layout, |this| {
+                this.rounded_lg()
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(cx.theme().colors().border_variant)
+            })
             .when(window.is_a11y_active(), |this| {
                 this.track_focus(&self.region_focus_handles.editor)
             })
@@ -9714,6 +9732,7 @@ impl Render for Workspace {
         let theme = cx.theme().clone();
         let colors = theme.colors();
         let activity_bar = WorkspaceSettings::get_global(cx).activity_bar;
+        let island_layout = WorkspaceSettings::get_global(cx).island_layout;
         let left_bar = activity_bar
             .then(|| self.render_activity_bar(DockPosition::Left, cx))
             .flatten();
@@ -9808,7 +9827,12 @@ impl Render for Workspace {
                     .child(
                         div()
                             .id("workspace")
-                            .bg(colors.background)
+                            .bg(if island_layout {
+                                colors.title_bar_background
+                            } else {
+                                colors.background
+                            })
+                            .when(island_layout, |this| this.p(Self::ISLAND_MARGIN))
                             .relative()
                             .flex_1()
                             .w_full()
