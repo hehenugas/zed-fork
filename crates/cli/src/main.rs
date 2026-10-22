@@ -946,8 +946,9 @@ mod linux {
                 .unwrap_or_else(|| paths::data_dir().clone());
 
             let sock_path = data_dir.join(format!(
-                "zed-{}.sock",
-                *release_channel::RELEASE_CHANNEL_NAME
+                "zed-{}-{}.sock",
+                *release_channel::RELEASE_CHANNEL_NAME,
+                release_channel::RELEASE_CHANNEL.app_id()
             ));
             let sock = UnixDatagram::unbound()?;
             if sock.connect(&sock_path).is_err() {

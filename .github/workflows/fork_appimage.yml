@@ -68,8 +68,11 @@ jobs:
           #!/usr/bin/env bash
           HERE="$(dirname "$(readlink -f "$0")")"
           export ZED_UPDATE_EXPLANATION="Updates are disabled in the fork AppImage."
-          USER_DATA_DIR="${ZED_FORK_USER_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/zed-fork}"
-          exec "$HERE/libexec/zed-editor" --user-data-dir "$USER_DATA_DIR" "$@"
+          # Share Zed's default data/config paths unless the user requests isolation.
+          if [[ -n "${ZED_FORK_USER_DATA_DIR:-}" ]]; then
+            exec "$HERE/libexec/zed-editor" --user-data-dir "$ZED_FORK_USER_DATA_DIR" "$@"
+          fi
+          exec "$HERE/libexec/zed-editor" "$@"
           RUN
           chmod +x AppDir/AppRun
           version="$(script/get-crate-version zed)"

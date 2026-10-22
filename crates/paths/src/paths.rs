@@ -14,8 +14,8 @@ pub const EDITORCONFIG_NAME: &str = ".editorconfig";
 /// The application name, used to derive platform-specific data, config, cache,
 /// and state directory paths.
 ///
-/// Forks should use `--user-data-dir` to isolate their data while keeping this
-/// value in sync with the `zed` binary name.
+/// Forks that share upstream Zed's data should keep this name in sync with the
+/// upstream binary; pass `--user-data-dir` when isolated data is needed.
 pub const APP_NAME: &str = "Zed";
 
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on
