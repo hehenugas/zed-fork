@@ -5009,7 +5009,6 @@ impl ThreadView {
                             .relative()
                             .w_full()
                             .min_h_0()
-                            .min_h(rems_from_px(52.0_f32))
                             .when(fills_container, |this| this.flex_1())
                             .pt_1()
                             .pr_2p5()
@@ -7985,8 +7984,6 @@ impl ThreadView {
 
     pub(crate) fn sync_editor_mode(&mut self, cx: &mut Context<Self>) {
         let has_messages = self.list_state.item_count() > 0;
-        let v2_empty_state = !has_messages;
-
         if !has_messages {
             self.editor_expanded = false;
         }
@@ -7996,12 +7993,6 @@ impl ThreadView {
                 scale_ui_elements_with_buffer_font_size: false,
                 show_active_line_background: false,
                 sizing_behavior: SizingBehavior::ExcludeOverscrollMargin,
-            }
-        } else if v2_empty_state {
-            EditorMode::Full {
-                scale_ui_elements_with_buffer_font_size: false,
-                show_active_line_background: false,
-                sizing_behavior: SizingBehavior::Default,
             }
         } else {
             EditorMode::AutoHeight {
@@ -8535,7 +8526,6 @@ impl ThreadView {
         // line (wrapped or not) is padded consistently.
         style.code_block_overflow_x_scroll = false;
 
-        let header_bg = self.tool_card_header_bg(cx);
         let run_command_label = if is_preview {
             Some(
                 h_flex().h_6().child(
@@ -8566,8 +8556,13 @@ impl ThreadView {
         v_flex()
             .group(group)
             .relative()
-            .p_1p5()
-            .bg(header_bg)
+            .mx_2()
+            .mb_2()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().colors().border_variant)
+            .bg(cx.theme().colors().editor_background)
             .when(is_preview, |this| this.pt_1().children(run_command_label))
             .child(markdown_element)
             .child(div().absolute().top_1().right_1().child(copy_button))
@@ -8627,7 +8622,7 @@ impl ThreadView {
             "terminal-tool-header-group-{}",
             terminal.entity_id()
         ));
-        let border_color = cx.theme().colors().border.opacity(0.6);
+        let border_color = cx.theme().colors().border_variant;
 
         let working_dir = working_dir
             .as_ref()
@@ -8723,7 +8718,8 @@ impl ThreadView {
                     .border_1()
                     .when(tool_failed || command_failed, |card| card.border_dashed())
                     .border_color(border_color)
-                    .rounded_lg()
+                    .bg(cx.theme().colors().element_background)
+                    .rounded_xl()
             })
             .overflow_hidden()
             .child(header)

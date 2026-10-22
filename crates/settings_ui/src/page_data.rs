@@ -8729,7 +8729,7 @@ fn collaboration_page() -> SettingsPage {
 }
 
 fn ai_page(cx: &App) -> SettingsPage {
-    fn general_section() -> [SettingsPageItem; 9] {
+    fn general_section() -> [SettingsPageItem; 8] {
         [
             SettingsPageItem::SectionHeader("General"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -8766,33 +8766,6 @@ fn ai_page(cx: &App) -> SettingsPage {
                             .agent
                             .get_or_insert_default()
                             .set_threads_sidebar_position(value);
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Threads Sidebar Scope",
-                description: "Whether the Threads Sidebar and thread history show only the active workspace or every project.",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("agent.threads_sidebar.scope"),
-                    pick: |settings_content| {
-                        settings_content
-                            .agent
-                            .as_ref()?
-                            .threads_sidebar
-                            .as_ref()?
-                            .scope
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .agent
-                            .get_or_insert_default()
-                            .threads_sidebar
-                            .get_or_insert_default()
-                            .scope = value;
                     },
                 }),
                 metadata: None,

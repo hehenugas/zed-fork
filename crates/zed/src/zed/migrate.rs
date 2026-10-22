@@ -259,19 +259,13 @@ impl Render for MigrationBanner {
     }
 }
 
-async fn should_migrate_keymap(fs: Arc<dyn Fs>) -> Result<bool> {
-    let old_text = KeymapFile::load_keymap_file(&fs).await?;
-    if let Ok(Some(_)) = migrate_keymap(&old_text) {
-        return Ok(true);
-    };
+async fn should_migrate_keymap(_fs: Arc<dyn Fs>) -> Result<bool> {
     Ok(false)
 }
 
-async fn should_migrate_settings(fs: Arc<dyn Fs>) -> Result<bool> {
-    let old_text = SettingsStore::load_settings(&fs).await?;
-    if let Ok(Some(_)) = migrate_settings(&old_text) {
-        return Ok(true);
-    };
+// The settings and keymap files are shared with upstream Zed, which can't read
+// the migrated format, so the fork never offers to rewrite them.
+async fn should_migrate_settings(_fs: Arc<dyn Fs>) -> Result<bool> {
     Ok(false)
 }
 

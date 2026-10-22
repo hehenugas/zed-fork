@@ -127,21 +127,27 @@ impl RenderOnce for TerminalToolHeader {
 
         let child_id = |name: &str| format!("terminal-tool-{name}-{id}");
 
-        let header_bg = cx
-            .theme()
-            .colors()
-            .element_background
-            .blend(cx.theme().colors().editor_foreground.opacity(0.025));
+        let header_bg = cx.theme().colors().element_background;
+        let status_label = if running { "Running command" } else { "Ran command" };
 
         let header_row = h_flex()
             .id(child_id("header"))
-            .pt_1()
-            .pl_1p5()
-            .pr_1()
+            .items_center()
+            .px_3()
+            .py_2()
             .flex_none()
-            .gap_1()
-            .justify_between()
-            .rounded_t_md()
+            .gap_2()
+            .rounded_t_lg()
+            .child(
+                Icon::new(IconName::Terminal)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new(status_label)
+                    .size(LabelSize::Small)
+                    .flex_none(),
+            )
             .child(
                 div().w_full().min_w_0().overflow_hidden().child(
                     Label::new(working_dir)
@@ -155,7 +161,6 @@ impl RenderOnce for TerminalToolHeader {
                 Disclosure::new(child_id("disclosure"), is_expanded)
                     .opened_icon(IconName::ChevronUp)
                     .closed_icon(IconName::ChevronDown)
-                    .visible_on_hover(&hover_group)
                     .when_some(on_toggle_expand, |this, handler| this.on_click(handler)),
             )
             .when(show_elapsed, |header| {

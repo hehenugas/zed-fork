@@ -430,6 +430,7 @@ pub fn all_schema_file_associations(
         {
             "fileMatch": [
                 schema_file_match(paths::settings_file()),
+                schema_file_match(paths::fork_settings_file()),
             ],
             "url": format!("{SCHEMA_URI_PREFIX}settings"),
         },

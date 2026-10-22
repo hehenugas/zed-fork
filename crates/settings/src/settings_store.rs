@@ -156,6 +156,8 @@ pub struct SettingsStore {
     merged_settings: Rc<SettingsContent>,
 
     last_user_settings_content: Option<String>,
+    raw_user_settings_content: Option<String>,
+    fork_settings_content: Option<String>,
     last_global_settings_content: Option<String>,
     local_settings: BTreeMap<(WorktreeId, Arc<RelPath>), SettingsContent>,
     pub editorconfig_store: Entity<EditorconfigStore>,
@@ -317,6 +319,8 @@ impl SettingsStore {
 
             merged_settings: default_settings,
             last_user_settings_content: None,
+            raw_user_settings_content: None,
+            fork_settings_content: None,
             last_global_settings_content: None,
             local_settings: BTreeMap::default(),
             editorconfig_store: cx.new(|_| EditorconfigStore::default()),
@@ -361,6 +365,11 @@ impl SettingsStore {
             fs.clone(),
             paths::settings_file().clone(),
         );
+        let (mut fork_settings_file_rx, fork_settings_watcher) = crate::watch_config_file(
+            cx.background_executor(),
+            fs.clone(),
+            paths::fork_settings_file().clone(),
+        );
         let (mut global_settings_file_rx, global_settings_watcher) = crate::watch_config_file(
             cx.background_executor(),
             fs,
@@ -376,6 +385,12 @@ impl SettingsStore {
             .block_on(user_settings_file_rx.next())
             .unwrap();
 
+        let fork_content = cx
+            .foreground_executor()
+            .block_on(fork_settings_file_rx.next())
+            .unwrap_or_default();
+        self.fork_settings_content = Some(fork_content);
+
         let result = self.set_user_settings(&user_content, cx);
         settings_changed(SettingsFile::User, result, cx);
         let result = self.set_global_settings(&global_content, cx);
@@ -384,19 +399,30 @@ impl SettingsStore {
         self._settings_files_watcher = Some(cx.spawn(async move |cx| {
             let _user_settings_watcher = user_settings_watcher;
             let _global_settings_watcher = global_settings_watcher;
+            let _fork_settings_watcher = fork_settings_watcher;
             let mut settings_streams = futures::stream::select(
-                global_settings_file_rx.map(|content| (SettingsFile::Global, content)),
-                user_settings_file_rx.map(|content| (SettingsFile::User, content)),
+                futures::stream::select(
+                    global_settings_file_rx.map(|content| (Some(SettingsFile::Global), content)),
+                    user_settings_file_rx.map(|content| (Some(SettingsFile::User), content)),
+                ),
+                fork_settings_file_rx.map(|content| (None, content)),
             );
 
             while let Some((settings_file, content)) = settings_streams.next().await {
                 cx.update_global(|store: &mut SettingsStore, cx| {
                     let result = match settings_file {
-                        SettingsFile::User => store.set_user_settings(&content, cx),
-                        SettingsFile::Global => store.set_global_settings(&content, cx),
+                        Some(SettingsFile::User) => store.set_user_settings(&content, cx),
+                        Some(SettingsFile::Global) => store.set_global_settings(&content, cx),
+                        None => {
+                            store.set_fork_settings(&content, cx);
+                            cx.refresh_windows();
+                            return;
+                        }
                         _ => return,
                     };
-                    settings_changed(settings_file, result, cx);
+                    if let Some(settings_file) = settings_file {
+                        settings_changed(settings_file, result, cx);
+                    }
                     cx.refresh_windows();
                 });
             }
@@ -804,8 +830,9 @@ impl SettingsStore {
         } else {
             let migration_res = migrator::migrate_settings(user_settings_content);
             migration_status = match &migration_res {
-                Ok(Some(_)) => MigrationStatus::Succeeded,
-                Ok(None) => MigrationStatus::NotNeeded,
+                // Migrations still apply in memory so older files keep working, but the
+                // files are shared with upstream Zed and must never be rewritten.
+                Ok(Some(_)) | Ok(None) => MigrationStatus::NotNeeded,
                 Err(err) => MigrationStatus::Failed {
                     error: err.to_string(),
                 },
@@ -961,6 +988,9 @@ impl SettingsStore {
         user_settings_content: &str,
         cx: &mut App,
     ) -> SettingsParseResult {
+        self.raw_user_settings_content = Some(user_settings_content.to_string());
+        let user_settings_content = self.with_fork_settings(user_settings_content);
+        let user_settings_content = user_settings_content.as_str();
         if self.last_user_settings_content.as_deref() == Some(user_settings_content) {
             return SettingsParseResult {
                 parse_status: ParseStatus::Unchanged,
@@ -979,6 +1009,43 @@ impl SettingsStore {
             self.recompute_values(None, cx);
         }
         return parse_result;
+    }
+
+    /// Layers fork-only settings on top of the user settings, so that the fork
+    /// keys can live in their own file instead of upstream's `settings.json`.
+    fn with_fork_settings(&self, user_settings_content: &str) -> String {
+        let Some(fork_content) = self
+            .fork_settings_content
+            .as_deref()
+            .filter(|content| !content.trim().is_empty())
+        else {
+            return user_settings_content.to_string();
+        };
+        let user_value = if user_settings_content.trim().is_empty() {
+            Some(serde_json::json!({}))
+        } else {
+            crate::parse_json_with_comments::<serde_json::Value>(user_settings_content).ok()
+        };
+        let fork_value = crate::parse_json_with_comments::<serde_json::Value>(fork_content).ok();
+        match (user_value, fork_value) {
+            (Some(mut user_value), Some(fork_value)) => {
+                util::merge_non_null_json_value_into(fork_value, &mut user_value);
+                serde_json::to_string(&user_value)
+                    .unwrap_or_else(|_| user_settings_content.to_string())
+            }
+            _ => user_settings_content.to_string(),
+        }
+    }
+
+    /// Sets the fork-only settings via a JSON string.
+    pub fn set_fork_settings(&mut self, fork_settings_content: &str, cx: &mut App) {
+        if self.fork_settings_content.as_deref() == Some(fork_settings_content) {
+            return;
+        }
+        self.fork_settings_content = Some(fork_settings_content.to_string());
+        if let Some(raw_user_settings) = self.raw_user_settings_content.clone() {
+            _ = self.set_user_settings(&raw_user_settings, cx);
+        }
     }
 
     /// Sets the global settings via a JSON string.
