@@ -2908,7 +2908,7 @@ mod tests {
             assert_eq!(terminal.inner(), &renderer);
             assert_eq!(
                 terminal.command().read(cx).source(),
-                "```\nwire command\n```"
+                "```bash\nwire command\n```"
             );
             assert_eq!(
                 terminal.working_dir().as_deref(),

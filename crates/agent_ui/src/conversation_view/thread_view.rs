@@ -31,6 +31,7 @@ use crate::ui::{
 use crate::unicode_confusables;
 
 use db::kvp::KeyValueStore;
+use gpui::HighlightStyle;
 use gpui::List;
 use gpui::Stateful;
 use gpui::TaskExt;
@@ -8505,11 +8506,12 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> Div {
-        // The label's markdown source is a fenced code block (```\n...\n```);
+        // The label's markdown source is a fenced code block (```bash\n...\n```);
         // strip the fences so the copy button yields just the command text.
         let command_source = command.read(cx).source();
         let command_text = command_source
-            .strip_prefix("```\n")
+            .strip_prefix("```bash\n")
+            .or_else(|| command_source.strip_prefix("```\n"))
             .and_then(|s| s.strip_suffix("\n```"))
             .unwrap_or(&command_source)
             .to_string();
@@ -11293,6 +11295,7 @@ impl ThreadView {
                 markdown_style.clone(),
                 cx,
             )
+            .or_else(|| self.render_ansi_output(&markdown, tool_call, cx))
             .unwrap_or_else(|| {
                 self.render_markdown(markdown, markdown_style, cx)
                     .into_any()
@@ -11317,6 +11320,78 @@ impl ThreadView {
             .text_color(cx.theme().colors().text_muted)
             .child(output)
             .into_any_element()
+    }
+
+    /// Agents that run commands themselves send their output as plain text that
+    /// still carries ANSI escapes, which markdown would show as raw control
+    /// characters. Returns `None` when there is nothing to colorize.
+    fn render_ansi_output(
+        &self,
+        markdown: &Entity<Markdown>,
+        tool_call: &ToolCall,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if !matches!(tool_call.kind(), acp_v2::ToolKind::Execute) {
+            return None;
+        }
+
+        let source = markdown.read(cx).source();
+        if !source.contains('\x1b') {
+            return None;
+        }
+
+        let body = source
+            .strip_prefix("```")
+            .and_then(|rest| rest.split_once('\n'))
+            .map(|(_, body)| body.strip_suffix("\n```").unwrap_or(body))
+            .unwrap_or(source);
+        let parsed = terminal::parse_ansi_text(body.as_bytes());
+        let theme = cx.theme();
+
+        // Foreground and background spans overlap, but text highlights must not,
+        // so split the text at every span boundary and style each piece once.
+        let mut boundaries = parsed
+            .foreground_spans
+            .iter()
+            .chain(parsed.background_spans.iter())
+            .flat_map(|(range, _)| [range.start, range.end])
+            .collect::<Vec<_>>();
+        boundaries.sort_unstable();
+        boundaries.dedup();
+
+        let color_at = |spans: &terminal::AnsiSpans, offset: usize| {
+            spans
+                .iter()
+                .find(|(range, _)| range.contains(&offset))
+                .and_then(|(_, color)| color.as_ref())
+                .map(|color| terminal_view::terminal_element::convert_color(color, theme))
+        };
+        let highlights = boundaries
+            .windows(2)
+            .filter_map(|pair| {
+                let range = pair[0]..pair[1];
+                let color = color_at(&parsed.foreground_spans, range.start);
+                let background_color = color_at(&parsed.background_spans, range.start);
+                (color.is_some() || background_color.is_some()).then(|| {
+                    (
+                        range,
+                        HighlightStyle {
+                            color,
+                            background_color,
+                            ..Default::default()
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Some(
+            div()
+                .font_buffer(cx)
+                .w_full()
+                .child(StyledText::new(parsed.text).with_highlights(highlights))
+                .into_any_element(),
+        )
     }
 
     fn render_numbered_read_file_output(

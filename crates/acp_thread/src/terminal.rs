@@ -506,7 +506,7 @@ impl Terminal {
             _sandbox: sandbox,
             command: cx.new(|cx| {
                 Markdown::new(
-                    format!("```\n{}\n```", command_label).into(),
+                    format!("```bash\n{}\n```", command_label).into(),
                     Some(language_registry.clone()),
                     None,
                     cx,
@@ -567,7 +567,7 @@ impl Terminal {
             id,
             command: cx.new(|cx| {
                 Markdown::new(
-                    format!("```\n{}\n```", command_label.unwrap_or("Terminal")).into(),
+                    format!("```bash\n{}\n```", command_label.unwrap_or("Terminal")).into(),
                     Some(language_registry),
                     None,
                     cx,
@@ -772,7 +772,7 @@ impl Terminal {
                 state.command = DisplayCommand::Reported(command.take());
                 self.command.update(cx, |markdown, cx| {
                     markdown.replace(
-                        format!("```\n{}\n```", state.command().unwrap_or("Terminal")),
+                        format!("```bash\n{}\n```", state.command().unwrap_or("Terminal")),
                         cx,
                     );
                 });
@@ -861,7 +861,7 @@ impl Terminal {
             state.command = DisplayCommand::LegacyCaption(label.to_owned());
         }
         self.command.update(cx, |command, cx| {
-            command.replace(format!("```\n{}\n```", label), cx);
+            command.replace(format!("```bash\n{}\n```", label), cx);
         });
     }
 

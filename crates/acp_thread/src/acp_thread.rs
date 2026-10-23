@@ -9612,7 +9612,7 @@ mod tests {
                 assert_eq!(reused.read(cx).inner().entity_id(), lower.entity_id());
                 assert_eq!(
                     reused.read(cx).command().read(cx).source(),
-                    "```\nactual command\n```"
+                    "```bash\nactual command\n```"
                 );
                 assert!(lower.read(cx).get_content().contains("early"));
                 let (_, tool) = thread.tool_call(&tool_id).expect("tool");
@@ -9633,7 +9633,7 @@ mod tests {
             terminal.read_with(cx, |terminal, cx| {
                 assert_eq!(
                     terminal.command().read(cx).source(),
-                    "```\nactual command\n```"
+                    "```bash\nactual command\n```"
                 );
             });
             thread
@@ -9656,7 +9656,7 @@ mod tests {
                 })
                 .expect("explicit command clear remains authoritative");
             terminal.read_with(cx, |terminal, cx| {
-                assert_eq!(terminal.command().read(cx).source(), "```\nTerminal\n```");
+                assert_eq!(terminal.command().read(cx).source(), "```bash\nTerminal\n```");
             });
             thread
                 .update(cx, |thread, cx| {
@@ -9976,7 +9976,7 @@ mod tests {
             assert!(terminal.inner().read(cx).get_content().contains("fresh"));
             assert_eq!(
                 terminal.command().read(cx).source(),
-                "```\nfirst command\n```"
+                "```bash\nfirst command\n```"
             );
         });
         thread
@@ -10075,7 +10075,7 @@ mod tests {
             assert!(terminal.display_state().is_none());
             assert_eq!(
                 terminal.command().read(cx).source(),
-                "```\nnative command\n```"
+                "```bash\nnative command\n```"
             );
             assert!(terminal.output().is_none());
             assert_eq!(lower.read(cx).get_content(), before);
@@ -14509,7 +14509,7 @@ mod tests {
                     )
                     .is_err()
             );
-            assert_eq!(command.read(cx).source(), "```\noriginal command\n```");
+            assert_eq!(command.read(cx).source(), "```bash\noriginal command\n```");
             let (_, call) = thread.tool_call(&id).expect("unchanged tool");
             assert_eq!(call.label.read(cx).source(), "Tool caption");
             assert_eq!(call.terminals().next(), Some(&terminal));
@@ -14527,7 +14527,7 @@ mod tests {
                     cx,
                 )
                 .expect("valid terminal update");
-            assert_eq!(command.read(cx).source(), "```\nchanged command\n```");
+            assert_eq!(command.read(cx).source(), "```bash\nchanged command\n```");
             assert_eq!(
                 thread.tool_call(&id).expect("tool").1.terminals().next(),
                 Some(&terminal)
