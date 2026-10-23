@@ -1460,8 +1460,14 @@ impl GitPanel {
             let temporary_buffer = cx.new(|cx| Buffer::local(initial_commit_message, cx));
             let is_section = repository_override.is_some();
             let commit_editor = cx.new(|cx| {
-                let mut editor =
-                    commit_message_editor(temporary_buffer, None, project.clone(), true, window, cx);
+                let mut editor = commit_message_editor(
+                    temporary_buffer,
+                    None,
+                    project.clone(),
+                    true,
+                    window,
+                    cx,
+                );
                 if is_section {
                     editor.set_mode(section_commit_editor_mode());
                 }
@@ -6988,32 +6994,35 @@ impl GitPanel {
                         }
                     })),
             )
-            .when(self.repository_override.is_none(), |this| this.child({
-                let (icon, label) = if self.commit_editor_expanded {
-                    (IconName::Minimize, "Collapse Commit Editor")
-                } else {
-                    (IconName::Maximize, "Expand Commit Editor")
-                };
-                let focus_handle = self.focus_handle.clone();
+            .when(self.repository_override.is_none(), |this| {
+                this.child({
+                    let (icon, label) = if self.commit_editor_expanded {
+                        (IconName::Minimize, "Collapse Commit Editor")
+                    } else {
+                        (IconName::Maximize, "Expand Commit Editor")
+                    };
+                    let focus_handle = self.focus_handle.clone();
 
-                IconButton::new("fill-commit-editor", icon)
-                    .icon_size(IconSize::Small)
-                    .tooltip({
-                        move |_window, cx| {
-                            Tooltip::for_action_in(
-                                label,
-                                &git::ToggleFillCommitEditor,
-                                &focus_handle,
-                                cx,
-                            )
-                        }
-                    })
-                    .on_click(cx.listener({
-                        move |_, _, window, cx| {
-                            window.dispatch_action(git::ToggleFillCommitEditor.boxed_clone(), cx)
-                        }
-                    }))
-            }));
+                    IconButton::new("fill-commit-editor", icon)
+                        .icon_size(IconSize::Small)
+                        .tooltip({
+                            move |_window, cx| {
+                                Tooltip::for_action_in(
+                                    label,
+                                    &git::ToggleFillCommitEditor,
+                                    &focus_handle,
+                                    cx,
+                                )
+                            }
+                        })
+                        .on_click(cx.listener({
+                            move |_, _, window, cx| {
+                                window
+                                    .dispatch_action(git::ToggleFillCommitEditor.boxed_clone(), cx)
+                            }
+                        }))
+                })
+            });
 
         let collapsed = self.commit_editor_collapsed;
         let toggle_commit_editor_button = {
@@ -9502,6 +9511,30 @@ impl GitPanel {
                     .border_color(cx.theme().colors().border)
                     .child(Label::new("Changes").size(LabelSize::Small))
                     .child(
+                        h_flex()
+                            .gap_0p5()
+                            .child(
+                                IconButton::new("refresh-all-repositories", IconName::RotateCw)
+                                    .icon_size(IconSize::Small)
+                                    .tooltip(Tooltip::text("Refresh All Repositories"))
+                                    .on_click({
+                                        let repositories = self
+                                            .repository_sections
+                                            .iter()
+                                            .filter_map(|(_, panel)| {
+                                                panel.read(cx).active_repository.clone()
+                                            })
+                                            .collect::<Vec<_>>();
+                                        move |_, _, cx| {
+                                            for repo in &repositories {
+                                                repo.update(cx, |repo, cx| {
+                                                    repo.reload_git_state(cx)
+                                                });
+                                            }
+                                        }
+                                    }),
+                            )
+                            .child(
                         IconButton::new(
                             "toggle-all-repositories",
                             if all_collapsed {
@@ -9525,6 +9558,7 @@ impl GitPanel {
                             }
                             cx.notify();
                         })),
+                            ),
                     ),
             )
             .children(
@@ -9629,6 +9663,26 @@ impl GitPanel {
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.stop_propagation()
                                             })
+                                            .child(
+                                                IconButton::new(
+                                                    SharedString::from(format!(
+                                                        "section-refresh-{repository_id:?}"
+                                                    )),
+                                                    IconName::RotateCw,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text("Refresh Status"))
+                                                .on_click({
+                                                    let repo = repo.clone();
+                                                    move |_, _, cx| {
+                                                        if let Some(repo) = &repo {
+                                                            repo.update(cx, |repo, cx| {
+                                                                repo.reload_git_state(cx)
+                                                            });
+                                                        }
+                                                    }
+                                                }),
+                                            )
                                             .child(
                                                 IconButton::new(
                                                     SharedString::from(format!(
@@ -9823,8 +9877,7 @@ impl Render for GitPanel {
                                 GitPanelViewMode::Tree(state) => state.logical_indices.len(),
                                 GitPanelViewMode::Flat => self.visible_flat_entry_indices().len(),
                             };
-                            let section_list_height = self.list_item_height()
-                                * entry_count as f32;
+                            let section_list_height = self.list_item_height() * entry_count as f32;
                             this.children(self.render_changes_header(window, cx))
                                 .when(is_section, |this| {
                                     this.children(self.render_footer(window, cx))

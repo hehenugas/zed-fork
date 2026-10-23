@@ -10200,6 +10200,12 @@ impl Repository {
         self.pending_ops = updated;
     }
 
+    /// Re-reads HEAD, branch and file statuses from git, for when the tracked
+    /// state drifted from what is on disk.
+    pub fn reload_git_state(&mut self, cx: &mut Context<Self>) {
+        self.schedule_scan(None, cx);
+    }
+
     fn schedule_scan(
         &mut self,
         updates_tx: Option<mpsc::UnboundedSender<DownstreamUpdate>>,

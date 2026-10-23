@@ -54,8 +54,8 @@ use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
     AccessibleMode, MultiWorkspace, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
-    ToggleWorktreeSecurity, Workspace,
-    WorkspaceSettings, dock::DockPosition,
+    ToggleWorktreeSecurity, Workspace, WorkspaceSettings,
+    dock::DockPosition,
     notifications::{NotifyResultExt, NotifyTaskExt as _},
 };
 
@@ -498,7 +498,11 @@ impl TitleBar {
         );
         subscriptions.push(cx.observe(&user_store, |_a, _, cx| cx.notify()));
         if let Some(workspace_entity) = workspace.weak_handle().upgrade() {
-            for position in [DockPosition::Left, DockPosition::Bottom, DockPosition::Right] {
+            for position in [
+                DockPosition::Left,
+                DockPosition::Bottom,
+                DockPosition::Right,
+            ] {
                 let dock = workspace_entity.read(cx).dock_at_position(position).clone();
                 subscriptions.push(cx.observe(&dock, |_, _, cx| cx.notify()));
             }
@@ -1255,25 +1259,23 @@ impl TitleBar {
                 ToggleRightDock.boxed_clone(),
             ),
         ];
-        Some(
-            h_flex()
-                .gap_0p5()
-                .children(toggles.into_iter().map(
-                    |(position, id, icon, filled_icon, label, action)| {
-                        let is_open = workspace.dock_at_position(position).read(cx).is_open();
-                        IconButton::new(id, if is_open { filled_icon } else { icon })
-                            .icon_size(IconSize::Small)
-                            .icon_color(if is_open { Color::Default } else { Color::Muted })
-                            .tooltip({
-                                let action = action.boxed_clone();
-                                move |_, cx| Tooltip::for_action(label, &*action, cx)
-                            })
-                            .on_click(move |_, window, cx| {
-                                window.dispatch_action(action.boxed_clone(), cx)
-                            })
-                    },
-                )),
-        )
+        Some(h_flex().gap_0p5().children(toggles.into_iter().map(
+            |(position, id, icon, filled_icon, label, action)| {
+                let is_open = workspace.dock_at_position(position).read(cx).is_open();
+                IconButton::new(id, if is_open { filled_icon } else { icon })
+                    .icon_size(IconSize::Small)
+                    .icon_color(if is_open {
+                        Color::Default
+                    } else {
+                        Color::Muted
+                    })
+                    .tooltip({
+                        let action = action.boxed_clone();
+                        move |_, cx| Tooltip::for_action(label, &*action, cx)
+                    })
+                    .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+            },
+        )))
     }
 
     pub fn render_user_menu_button(&mut self, cx: &mut Context<Self>) -> impl Element {
