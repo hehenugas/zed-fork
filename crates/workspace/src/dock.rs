@@ -1280,7 +1280,7 @@ impl Dock {
 impl Render for Dock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dispatch_context = Self::dispatch_context();
-        let show_top_buttons = self.position == DockPosition::Right
+        let show_top_buttons = self.position == DockPosition::Left
             && WorkspaceSettings::get_global(cx).island_layout
             && self.visible_entry().is_some();
         if show_top_buttons && self.top_buttons.is_none() {
@@ -1453,11 +1453,11 @@ impl Render for PanelButtons {
         let hide_in_status_bar = activity_bar_side.is_none()
             && !top_bar
             && (workspace_settings.activity_bar
-                || (workspace_settings.island_layout && dock.position == DockPosition::Right));
+                || (workspace_settings.island_layout && dock.position == DockPosition::Left));
         let (menu_anchor, menu_attach) = match activity_bar_side {
             Some(DockPosition::Right) => (Anchor::TopRight, Anchor::TopLeft),
             Some(_) => (Anchor::TopLeft, Anchor::TopRight),
-            None if top_bar => (Anchor::TopRight, Anchor::BottomRight),
+            None if top_bar => (Anchor::TopLeft, Anchor::BottomLeft),
             None => match dock.position {
                 DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
                 DockPosition::Bottom | DockPosition::Right => {
