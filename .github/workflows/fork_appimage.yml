@@ -58,7 +58,8 @@ jobs:
           # Host GPU drivers need a newer libstdc++/libxkbcommon than the Ubuntu 22.04 copies.
           rm -f AppDir/lib/libstdc++.so.6 AppDir/lib/libxkbcommon*.so*
           cp AppDir/share/applications/*.desktop AppDir/zed.desktop
-          cp AppDir/share/icons/hicolor/512x512/apps/zed.png AppDir/zed.png
+          cp script/fork-icon/zed-fork-512.png AppDir/zed.png
+          cp script/fork-icon/zed-fork-512.png AppDir/share/icons/hicolor/512x512/apps/zed.png
           cat > AppDir/AppRun <<'RUN'
           #!/usr/bin/env bash
           HERE="$(dirname "$(readlink -f "$0")")"

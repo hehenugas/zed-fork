@@ -26,9 +26,11 @@ SRC="$(ls "$TMP"/zed-fork_*_x86_64.AppImage)"
 OUT="$BIN_DIR/zed-fork.AppImage"
 
 mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICON_DIR"
-install -Dm755 "$SRC" "$OUT"
+# Rename over the old file so a running instance keeps working.
+install -Dm755 "$SRC" "$OUT.new"
+mv -f "$OUT.new" "$OUT"
 
-"$OUT" --appimage-extract zed.png >/dev/null 2>&1 && mv squashfs-root/zed.png "$ICON_DIR/zed-fork.png" && rmdir squashfs-root 2>/dev/null || true
+install -Dm644 "$(dirname "$0")/fork-icon/zed-fork-512.png" "$ICON_DIR/zed-fork.png"
 
 cat > "$APPS_DIR/zed-fork.desktop" <<DESK
 [Desktop Entry]
@@ -36,12 +38,13 @@ Type=Application
 Name=Zed Fork
 Comment=Zed fork with a VS Code style UI
 Exec=$OUT %U
-Icon=zed-fork
+Icon=$ICON_DIR/zed-fork.png
 Terminal=false
 Categories=Development;TextEditor;
 StartupWMClass=dev.zed.Zed-Fork
 DESK
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 mkdir -p "$HOME/.local/bin" && ln -sf "$OUT" "$HOME/.local/bin/zed-fork"
 
 log "Installed: $OUT (also as ~/.local/bin/zed-fork)"
