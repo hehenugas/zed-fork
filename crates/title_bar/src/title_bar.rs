@@ -499,14 +499,6 @@ impl TitleBar {
         );
         subscriptions.push(cx.observe(&user_store, |_a, _, cx| cx.notify()));
         if let Some(workspace_entity) = workspace.weak_handle().upgrade() {
-            for position in [
-                DockPosition::Left,
-                DockPosition::Bottom,
-                DockPosition::Right,
-            ] {
-                let dock = workspace_entity.read(cx).dock_at_position(position).clone();
-                subscriptions.push(cx.observe(&dock, |_, _, cx| cx.notify()));
-            }
             subscriptions.push(cx.subscribe(
                 &workspace_entity,
                 |_, _, event: &workspace::Event, cx| {
