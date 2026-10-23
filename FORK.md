@@ -5,10 +5,24 @@ Dokumen ini mencatat apa saja yang fork ini ubah dari upstream Zed, supaya waktu
 ## Basis
 
 - Branch kerja: `custom` (remote `hehenugas/zed-fork`). Remote `upstream` = `zed-industries/zed`.
-- Basis upstream saat ini: commit `aed37547d8` ("Bump to 1.24.4"), yaitu stable v1.24.x. Semua perbedaan fork dihitung dari sini:
-  `git diff aed37547d8 custom --stat` (47 file).
+- Basis upstream saat ini: tag `v1.24.4` = commit `aed37547d8` ("Bump to 1.24.4"), stable v1.24.x (branch upstream `v1.24.x`). Semua perbedaan fork dihitung dari sini:
+  `git diff v1.24.4 custom --stat` (47 file). Perbarui baris ini setiap kali sinkron.
 - Branch lokal `main` BUKAN basis. Isinya upstream main yang lebih baru dan sudah menyimpang dari stable, jadi `git diff main custom` penuh noise upstream.
-- Sinkron ke upstream: `script/fork-sync.sh` (jalan dari `custom`, merge tag stable terbaru lalu `cargo check -p zed`).
+- Sinkron ke upstream: `script/fork-sync.sh` (jalan dari `custom`, merge tag stable terbaru lalu `cargo check -p zed`). Setiap sinkron WAJIB dicatat di bagian "Riwayat sinkronisasi upstream" di bawah.
+
+## Riwayat sinkronisasi upstream
+
+Catat satu baris tiap kali fork di-sync ke upstream (terbaru di atas). Isi: tanggal, tag upstream, commit tag itu, commit merge di `custom`, hasil cek, dan catatan konflik atau perubahan upstream yang berpengaruh ke fork.
+
+| Tanggal | Tag upstream | Commit tag | Commit merge di `custom` | Hasil | Catatan |
+|---|---|---|---|---|---|
+| 2026-10-21 | `v1.24.4` | `aed37547d8` | (basis awal, tanpa merge) | fork dibuat dari tag ini | Commit fork pertama: `de7f455f66` |
+
+Cara mengisi setelah sinkron:
+1. `git describe --tags --abbrev=0 upstream/v1.24.x` (atau tag yang dipakai `fork-sync.sh`) untuk nama tag, lalu `git rev-parse --short=10 <tag>^{commit}` untuk commit-nya.
+2. `git log --oneline -1` di `custom` setelah merge untuk commit merge.
+3. Ganti nilai "Basis upstream saat ini" di bagian Basis, dan jalankan ulang `git diff <tag> custom --stat` untuk memperbarui jumlah file.
+4. Tulis konflik yang terjadi dan cara menyelesaikannya, supaya sinkron berikutnya lebih cepat.
 
 ## Prinsip fork
 
@@ -87,7 +101,7 @@ Dokumen ini mencatat apa saja yang fork ini ubah dari upstream Zed, supaya waktu
 Urut dari yang paling mungkin konflik:
 `crates/git_ui/src/git_panel.rs`, `crates/workspace/src/workspace.rs`, `crates/workspace/src/dock.rs`, `crates/workspace/src/multi_workspace.rs`, `crates/sidebar/src/sidebar.rs` (+ tests), `crates/agent_ui/src/{agent_panel.rs,threads_archive_view.rs}`, `crates/agent_ui/src/conversation_view/thread_view.rs`, `crates/title_bar/src/title_bar.rs`, `crates/settings/src/settings_store.rs`, `crates/release_channel/src/lib.rs`, `script/bundle-linux`.
 
-Checklist setelah sinkron: `cargo check -p zed`, `cargo test -p sidebar -p git_ui -p settings`, jalankan AppImage hasil build sebentar dari terminal (cek panic saat startup), lalu cek tampilan: island, tombol title bar, git panel multi-repo, sidebar threads.
+Checklist setelah sinkron: catat di tabel riwayat, `cargo check -p zed`, `cargo test -p sidebar -p git_ui -p settings`, jalankan AppImage hasil build sebentar dari terminal (cek panic saat startup), lalu cek tampilan: island, tombol title bar, git panel multi-repo, sidebar threads.
 
 ## Belum dikerjakan / ide lanjutan
 
