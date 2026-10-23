@@ -55,7 +55,7 @@ use util::ResultExt;
 use workspace::{
     AccessibleMode, MultiWorkspace, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
     ToggleWorktreeSecurity, Workspace, WorkspaceSettings,
-    dock::DockPosition,
+    dock::{Dock, DockPosition},
     notifications::{NotifyResultExt, NotifyTaskExt as _},
 };
 
@@ -215,6 +215,7 @@ pub struct TitleBar {
     user_store: Entity<UserStore>,
     client: Arc<Client>,
     workspace: WeakEntity<Workspace>,
+    docks: [(DockPosition, Entity<Dock>); 3],
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
     application_menu: Option<Entity<ApplicationMenu>>,
     _subscriptions: Vec<Subscription>,
@@ -515,6 +516,15 @@ impl TitleBar {
                 },
             ));
         }
+        let docks = [
+            DockPosition::Left,
+            DockPosition::Bottom,
+            DockPosition::Right,
+        ]
+        .map(|position| (position, workspace.dock_at_position(position).clone()));
+        for (_, dock) in &docks {
+            subscriptions.push(cx.observe(dock, |_, _, cx| cx.notify()));
+        }
         subscriptions.push(cx.observe_button_layout_changed(window, |_, _, cx| cx.notify()));
         if let Some(trusted_worktrees) = TrustedWorktrees::try_get_global(cx) {
             subscriptions.push(cx.subscribe(&trusted_worktrees, |_, _, _, cx| {
@@ -534,6 +544,7 @@ impl TitleBar {
         let banner = None;
 
         let mut this = Self {
+            docks,
             platform_titlebar,
             application_menu,
             workspace: workspace.weak_handle(),
@@ -1231,8 +1242,6 @@ impl TitleBar {
         if !WorkspaceSettings::get_global(cx).island_layout {
             return None;
         }
-        let workspace = self.workspace.upgrade()?;
-        let workspace = workspace.read(cx);
         let toggles = [
             (
                 DockPosition::Left,
@@ -1261,7 +1270,11 @@ impl TitleBar {
         ];
         Some(h_flex().gap_0p5().children(toggles.into_iter().map(
             |(position, id, icon, filled_icon, label, action)| {
-                let is_open = workspace.dock_at_position(position).read(cx).is_open();
+                let is_open = self
+                    .docks
+                    .iter()
+                    .find(|(dock_position, _)| *dock_position == position)
+                    .is_some_and(|(_, dock)| dock.read(cx).is_open());
                 IconButton::new(id, if is_open { filled_icon } else { icon })
                     .icon_size(IconSize::Small)
                     .icon_color(if is_open {
