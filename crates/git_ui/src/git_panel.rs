@@ -9567,7 +9567,7 @@ impl GitPanel {
                     .map(|(repository_id, panel)| {
                         let collapsed = self.collapsed_repositories.contains(repository_id);
                         let repo = panel.read(cx).active_repository.clone();
-                        let (name, branch, change_count) = repo
+                        let (name, branch, change_count, behind, ahead) = repo
                             .as_ref()
                             .map(|repo| {
                                 let repo = repo.read(cx);
@@ -9583,10 +9583,15 @@ impl GitPanel {
                                     .map(|branch| branch.name().to_string())
                                     .unwrap_or_else(|| "No branch".to_owned());
                                 let change_count = repo.status_summary().count;
-                                (name, branch, change_count)
+                                let (ahead, behind) = repo
+                                    .branch
+                                    .as_ref()
+                                    .and_then(|branch| branch.tracking_status())
+                                    .map_or((0, 0), |status| (status.ahead, status.behind));
+                                (name, branch, change_count, behind, ahead)
                             })
                             .unwrap_or_else(|| {
-                                ("Repository".to_owned(), "No branch".to_owned(), 0)
+                                ("Repository".to_owned(), "No branch".to_owned(), 0, 0, 0)
                             });
                         let repository_id_for_click = *repository_id;
                         let panel = panel.clone();
@@ -9720,6 +9725,11 @@ impl GitPanel {
                                                 }),
                                             )
                                             .child(
+                                                Label::new(behind.to_string())
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Muted),
+                                            )
+                                            .child(
                                                 IconButton::new(
                                                     SharedString::from(format!(
                                                         "section-push-{repository_id:?}"
@@ -9736,6 +9746,11 @@ impl GitPanel {
                                                         });
                                                     }
                                                 }),
+                                            )
+                                            .child(
+                                                Label::new(ahead.to_string())
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Muted),
                                             ),
                                     )
                                     .child(
