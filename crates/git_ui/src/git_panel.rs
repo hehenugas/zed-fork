@@ -1221,8 +1221,14 @@ impl From<&Arc<InitialGraphCommitData>> for CommitHistoryEntry {
     }
 }
 
-const MAX_SECTION_LIST_ROWS: usize = 12;
 const MAX_PANEL_EDITOR_LINES: usize = 6;
+
+fn section_commit_editor_mode() -> EditorMode {
+    EditorMode::AutoHeight {
+        min_lines: 2,
+        max_lines: Some(MAX_PANEL_EDITOR_LINES),
+    }
+}
 
 pub(crate) fn commit_message_editor(
     commit_message_buffer: Entity<Buffer>,
@@ -1452,8 +1458,14 @@ impl GitPanel {
             // just to let us render a placeholder editor.
             // Once the active git repo is set, this buffer will be replaced.
             let temporary_buffer = cx.new(|cx| Buffer::local(initial_commit_message, cx));
+            let is_section = repository_override.is_some();
             let commit_editor = cx.new(|cx| {
-                commit_message_editor(temporary_buffer, None, project.clone(), true, window, cx)
+                let mut editor =
+                    commit_message_editor(temporary_buffer, None, project.clone(), true, window, cx);
+                if is_section {
+                    editor.set_mode(section_commit_editor_mode());
+                }
+                editor
             });
 
             let scroll_handle = UniformListScrollHandle::new();
@@ -1489,8 +1501,32 @@ impl GitPanel {
                         _,
                         RepositoryEvent::StatusesChanged | RepositoryEvent::HeadChanged,
                         true,
-                    )
-                    | GitStoreEvent::RepositoryAdded
+                    ) => {
+                        this.schedule_update(window, cx);
+                    }
+                    // The flag only marks the project's active repository, so a
+                    // per-repository section has to match on its own repository.
+                    GitStoreEvent::RepositoryUpdated(
+                        repository_id,
+                        RepositoryEvent::StatusesChanged | RepositoryEvent::HeadChanged,
+                        false,
+                    ) if this
+                        .repository_override
+                        .as_ref()
+                        .is_some_and(|repository| repository.read(cx).id == *repository_id) =>
+                    {
+                        this.schedule_update(window, cx);
+                    }
+                    // Repository headers in the multi-repo panel read branch and
+                    // change count straight from the repository.
+                    GitStoreEvent::RepositoryUpdated(
+                        _,
+                        RepositoryEvent::StatusesChanged | RepositoryEvent::HeadChanged,
+                        false,
+                    ) if this.repository_override.is_none() => {
+                        cx.notify();
+                    }
+                    GitStoreEvent::RepositoryAdded
                     | GitStoreEvent::RepositoryRemoved(_)
                     | GitStoreEvent::ActiveRepositoryChanged(_) => {
                         this.schedule_update(window, cx);
@@ -5520,15 +5556,20 @@ impl GitPanel {
                         .as_ref()
                         != Some(&buffer)
                     {
+                        let is_section = git_panel.repository_override.is_some();
                         git_panel.commit_editor = cx.new(|cx| {
-                            commit_message_editor(
+                            let mut editor = commit_message_editor(
                                 buffer.clone(),
                                 git_panel.suggest_commit_message(cx).map(SharedString::from),
                                 git_panel.project.clone(),
                                 true,
                                 window,
                                 cx,
-                            )
+                            );
+                            if is_section {
+                                editor.set_mode(section_commit_editor_mode());
+                            }
+                            editor
                         });
                     }
 
@@ -6947,7 +6988,7 @@ impl GitPanel {
                         }
                     })),
             )
-            .child({
+            .when(self.repository_override.is_none(), |this| this.child({
                 let (icon, label) = if self.commit_editor_expanded {
                     (IconName::Minimize, "Collapse Commit Editor")
                 } else {
@@ -6972,7 +7013,7 @@ impl GitPanel {
                             window.dispatch_action(git::ToggleFillCommitEditor.boxed_clone(), cx)
                         }
                     }))
-            });
+            }));
 
         let collapsed = self.commit_editor_collapsed;
         let toggle_commit_editor_button = {
@@ -9538,19 +9579,47 @@ impl GitPanel {
                                     .child(Icon::new(IconName::FileGit).color(Color::Muted))
                                     .child(Label::new(name).truncate())
                                     .child(
-                                        h_flex()
-                                            .gap_0p5()
+                                        div()
                                             .min_w_0()
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
                                             .child(
-                                                Icon::new(IconName::GitBranch)
-                                                    .size(IconSize::XSmall)
-                                                    .color(Color::Muted),
-                                            )
-                                            .child(
-                                                Label::new(branch)
-                                                    .size(LabelSize::Small)
+                                                PopoverMenu::new(SharedString::from(format!(
+                                                    "section-branch-{repository_id:?}"
+                                                )))
+                                                .menu({
+                                                    let workspace = panel.read(cx).workspace.clone();
+                                                    let repo = repo.clone();
+                                                    move |window, cx| {
+                                                        Some(branch_picker::popover(
+                                                            workspace.clone(),
+                                                            false,
+                                                            repo.clone(),
+                                                            window,
+                                                            cx,
+                                                        ))
+                                                    }
+                                                })
+                                                .trigger_with_tooltip(
+                                                    Button::new(
+                                                        SharedString::from(format!(
+                                                            "section-branch-button-{repository_id:?}"
+                                                        )),
+                                                        branch,
+                                                    )
+                                                    .size(ButtonSize::None)
+                                                    .label_size(LabelSize::Small)
                                                     .color(Color::Muted)
-                                                    .truncate(),
+                                                    .start_icon(
+                                                        Icon::new(IconName::GitBranch)
+                                                            .size(IconSize::XSmall)
+                                                            .color(Color::Muted),
+                                                    )
+                                                    .truncate(true),
+                                                    Tooltip::text("Switch Branch"),
+                                                )
+                                                .anchor(Anchor::TopLeft),
                                             ),
                                     )
                                     .child(div().flex_1())
@@ -9755,7 +9824,7 @@ impl Render for GitPanel {
                                 GitPanelViewMode::Flat => self.visible_flat_entry_indices().len(),
                             };
                             let section_list_height = self.list_item_height()
-                                * entry_count.min(MAX_SECTION_LIST_ROWS) as f32;
+                                * entry_count as f32;
                             this.children(self.render_changes_header(window, cx))
                                 .when(is_section, |this| {
                                     this.children(self.render_footer(window, cx))

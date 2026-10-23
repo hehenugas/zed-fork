@@ -291,6 +291,7 @@ pub struct Dock {
     restoration: DockRestoreState,
     zoom_layer_open: bool,
     modal_layer: Entity<ModalLayer>,
+    top_buttons: Option<Entity<PanelButtons>>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -390,6 +391,7 @@ struct PanelEntry {
 pub struct PanelButtons {
     dock: Entity<Dock>,
     activity_bar_side: Option<DockPosition>,
+    top_bar: bool,
     _settings_subscription: Subscription,
 }
 
@@ -466,6 +468,7 @@ impl Dock {
                 restoration: DockRestoreState::Restoring { pending: None },
                 zoom_layer_open: false,
                 modal_layer,
+                top_buttons: None,
             }
         });
 
@@ -1277,6 +1280,14 @@ impl Dock {
 impl Render for Dock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dispatch_context = Self::dispatch_context();
+        let show_top_buttons = self.position == DockPosition::Right
+            && WorkspaceSettings::get_global(cx).island_layout
+            && self.visible_entry().is_some();
+        if show_top_buttons && self.top_buttons.is_none() {
+            let dock = cx.entity();
+            self.top_buttons = Some(cx.new(|cx| PanelButtons::for_top_bar(dock, cx)));
+        }
+        let top_buttons = self.top_buttons.clone().filter(|_| show_top_buttons);
         if let Some(entry) = self.visible_entry() {
             let position = self.position;
             let create_resize_handle = || {
@@ -1369,12 +1380,22 @@ impl Render for Dock {
                             Axis::Horizontal => this.w_full().h_full(),
                             Axis::Vertical => this.h_full().w_full(),
                         })
-                        .child(
-                            entry
-                                .panel
-                                .to_any()
-                                .cached(StyleRefinement::default().v_flex().size_full()),
-                        ),
+                        .map(|this| match top_buttons {
+                            Some(top_buttons) => this.flex().flex_col().child(top_buttons).child(
+                                div().w_full().flex_1().min_h_0().child(
+                                    entry
+                                        .panel
+                                        .to_any()
+                                        .cached(StyleRefinement::default().v_flex().size_full()),
+                                ),
+                            ),
+                            None => this.child(
+                                entry
+                                    .panel
+                                    .to_any()
+                                    .cached(StyleRefinement::default().v_flex().size_full()),
+                            ),
+                        }),
                 )
                 .when(self.resizable(cx), |this| {
                     this.child(create_resize_handle())
@@ -1395,7 +1416,15 @@ impl PanelButtons {
         Self {
             dock,
             activity_bar_side: None,
+            top_bar: false,
             _settings_subscription: settings_subscription,
+        }
+    }
+
+    fn for_top_bar(dock: Entity<Dock>, cx: &mut Context<Self>) -> Self {
+        Self {
+            top_bar: true,
+            ..Self::new(dock, cx)
         }
     }
 
@@ -1419,11 +1448,16 @@ impl Render for PanelButtons {
         let dock_position = dock.position;
 
         let activity_bar_side = self.activity_bar_side;
-        let hide_in_status_bar =
-            activity_bar_side.is_none() && WorkspaceSettings::get_global(cx).activity_bar;
+        let top_bar = self.top_bar;
+        let workspace_settings = WorkspaceSettings::get_global(cx);
+        let hide_in_status_bar = activity_bar_side.is_none()
+            && !top_bar
+            && (workspace_settings.activity_bar
+                || (workspace_settings.island_layout && dock.position == DockPosition::Right));
         let (menu_anchor, menu_attach) = match activity_bar_side {
             Some(DockPosition::Right) => (Anchor::TopRight, Anchor::TopLeft),
             Some(_) => (Anchor::TopLeft, Anchor::TopRight),
+            None if top_bar => (Anchor::TopRight, Anchor::BottomRight),
             None => match dock.position {
                 DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
                 DockPosition::Bottom | DockPosition::Right => {
@@ -1606,6 +1640,19 @@ impl Render for PanelButtons {
 
         if activity_bar_side.is_some() {
             return v_flex().gap_1().children(buttons).into_any_element();
+        }
+
+        if top_bar {
+            return h_flex()
+                .w_full()
+                .h_8()
+                .flex_none()
+                .justify_center()
+                .gap_1()
+                .border_b_1()
+                .border_color(cx.theme().colors().border_variant)
+                .children(buttons)
+                .into_any_element();
         }
 
         if dock_position == DockPosition::Right {
