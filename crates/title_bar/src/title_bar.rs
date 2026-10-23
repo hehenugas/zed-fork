@@ -54,7 +54,7 @@ use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
     AccessibleMode, MultiWorkspace, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
-    ToggleWorktreeSecurity, Workspace, WorkspaceSettings,
+    ToggleWorkspaceSidebar, ToggleWorktreeSecurity, Workspace, WorkspaceSettings,
     dock::{Dock, DockPosition},
     notifications::{NotifyResultExt, NotifyTaskExt as _},
 };
@@ -233,6 +233,10 @@ impl Render for TitleBar {
                 .upgrade()
                 .and_then(|ws| ws.read(cx).multi_workspace().cloned())
             {
+                if let Some(multi_workspace) = mw.upgrade() {
+                    self._subscriptions
+                        .push(cx.observe(&multi_workspace, |_, _, cx| cx.notify()));
+                }
                 self.multi_workspace = Some(mw.clone());
                 self.platform_titlebar.update(cx, |titlebar, _cx| {
                     titlebar.set_multi_workspace(mw);
@@ -507,6 +511,9 @@ impl TitleBar {
                     }
                 },
             ));
+        }
+        if let Some(multi_workspace) = multi_workspace.as_ref().and_then(|mw| mw.upgrade()) {
+            subscriptions.push(cx.observe(&multi_workspace, |_, _, cx| cx.notify()));
         }
         let docks = [
             DockPosition::Left,
@@ -1234,39 +1241,53 @@ impl TitleBar {
         if !WorkspaceSettings::get_global(cx).island_layout {
             return None;
         }
+        let sidebar_open = self
+            .multi_workspace
+            .as_ref()
+            .and_then(|multi_workspace| multi_workspace.upgrade())
+            .is_some_and(|multi_workspace| multi_workspace.read(cx).sidebar_open());
+        let dock_is_open = |position: DockPosition| {
+            self.docks
+                .iter()
+                .find(|(dock_position, _)| *dock_position == position)
+                .is_some_and(|(_, dock)| dock.read(cx).is_open())
+        };
         let toggles = [
             (
-                DockPosition::Left,
+                "toggle-threads-sidebar",
+                IconName::ChatSparkle,
+                IconName::ChatSparkleFilled,
+                "Toggle Threads Sidebar",
+                sidebar_open,
+                ToggleWorkspaceSidebar.boxed_clone(),
+            ),
+            (
                 "toggle-left-dock",
                 IconName::PanelLeft,
                 IconName::PanelLeftFilled,
                 "Toggle Left Dock",
+                dock_is_open(DockPosition::Left),
                 ToggleLeftDock.boxed_clone(),
             ),
             (
-                DockPosition::Bottom,
                 "toggle-bottom-dock",
                 IconName::PanelBottom,
                 IconName::PanelBottomFilled,
                 "Toggle Bottom Dock",
+                dock_is_open(DockPosition::Bottom),
                 ToggleBottomDock.boxed_clone(),
             ),
             (
-                DockPosition::Right,
                 "toggle-right-dock",
                 IconName::PanelRight,
                 IconName::PanelRightFilled,
                 "Toggle Right Dock",
+                dock_is_open(DockPosition::Right),
                 ToggleRightDock.boxed_clone(),
             ),
         ];
         Some(h_flex().gap_0p5().children(toggles.into_iter().map(
-            |(position, id, icon, filled_icon, label, action)| {
-                let is_open = self
-                    .docks
-                    .iter()
-                    .find(|(dock_position, _)| *dock_position == position)
-                    .is_some_and(|(_, dock)| dock.read(cx).is_open());
+            |(id, icon, filled_icon, label, is_open, action)| {
                 IconButton::new(id, if is_open { filled_icon } else { icon })
                     .icon_size(IconSize::Small)
                     .icon_color(if is_open {

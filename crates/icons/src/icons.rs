@@ -264,6 +264,8 @@ pub enum IconName {
     ThisWindow,
     Thread,
     ThreadFromSummary,
+    ChatSparkle,
+    ChatSparkleFilled,
     PanelBottom,
     PanelBottomFilled,
     PanelLeft,
