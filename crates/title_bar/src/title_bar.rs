@@ -254,6 +254,9 @@ impl Render for TitleBar {
         let mut children = <ArrayVec<_, 5>>::new();
 
         let island_layout = WorkspaceSettings::get_global(cx).island_layout;
+        // Upstream puts the menu bar on its own row above the title bar. The island
+        // layout keeps it in the same row, left of the other title bar items.
+        let separate_menu_row = show_menus && !island_layout;
         let (project_name, repository, linked_worktree_name) = self.project_info(cx);
 
         children.push(
@@ -266,7 +269,7 @@ impl Render for TitleBar {
                             || title_bar_settings.show_project_items);
                     title_bar
                         .when_some(
-                            self.application_menu.clone().filter(|_| !show_menus),
+                            self.application_menu.clone().filter(|_| !separate_menu_row),
                             |title_bar, menu| {
                                 // Hide the project/branch items to make room when the
                                 // menu bar is expanded -- except in accessible mode,
@@ -361,7 +364,7 @@ impl Render for TitleBar {
                 .into_any_element(),
         );
 
-        if show_menus {
+        if separate_menu_row {
             self.platform_titlebar.update(cx, |this, _| {
                 this.set_button_layout(button_layout);
                 this.set_children(
