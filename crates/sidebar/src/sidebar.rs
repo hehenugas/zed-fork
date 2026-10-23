@@ -8203,7 +8203,11 @@ impl Render for Sidebar {
                     this.child(self.render_cross_channel_import_onboarding(verbose, cx))
                 })
             })
-            .child(self.render_sidebar_bottom_bar(cx))
+            // The island layout already has the project switcher in the status bar
+            // and the other controls in the title bar, so the bar would be empty.
+            .when(!workspace::WorkspaceSettings::get_global(cx).island_layout, |this| {
+                this.child(self.render_sidebar_bottom_bar(cx))
+            })
     }
 }
 
