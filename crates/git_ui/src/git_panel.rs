@@ -50,7 +50,7 @@ use git::{
 use gpui::{
     AbsoluteLength, Action, Anchor, AnyElement, AsyncApp, AsyncWindowContext, ClickEvent,
     ClipboardItem, DismissEvent, Empty, Entity, EventEmitter, FocusHandle, Focusable, KeyContext,
-    MouseButton, MouseDownEvent, Pixels, Point, PromptLevel, ScrollStrategy, Subscription, Task,
+    MouseButton, MouseDownEvent, Pixels, Point, PromptLevel, ScrollHandle, ScrollStrategy, Subscription, Task,
     TaskExt, TextStyle, UniformListScrollHandle, WeakEntity, actions, anchored, deferred,
     uniform_list,
 };
@@ -1161,6 +1161,7 @@ pub struct GitPanel {
     pending_serialization: Task<()>,
     pub(crate) project: Entity<Project>,
     scroll_handle: UniformListScrollHandle,
+    repository_sections_scroll_handle: ScrollHandle,
     max_width_item_index: Option<usize>,
     selected_entry: Option<usize>,
     marked_entries: HashSet<RepoPath>,
@@ -1592,6 +1593,7 @@ impl GitPanel {
                 single_tracked_entry: None,
                 project,
                 scroll_handle,
+                repository_sections_scroll_handle: ScrollHandle::new(),
                 max_width_item_index: None,
                 selected_entry: None,
                 marked_entries: HashSet::default(),
@@ -8346,6 +8348,13 @@ impl GitPanel {
                     .custom_scrollbars(
                         Scrollbars::for_settings::<GitPanelScrollbarAccessor>()
                             .tracked_scroll_handle(&self.scroll_handle)
+                            // Sections are as tall as their content; the container of
+                            // all sections owns the vertical scrollbar.
+                            .show_along(if self.repository_override.is_some() {
+                                ScrollAxes::Horizontal
+                            } else {
+                                ScrollAxes::Both
+                            })
                             .with_track_along(
                                 ScrollAxes::Horizontal,
                                 cx.theme().colors().panel_background,
@@ -9485,7 +9494,12 @@ impl GitPanel {
         self.active_repository.as_ref()
     }
 
-    fn render_repository_sections(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_repository_sections(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let scroll_handle = self.repository_sections_scroll_handle.clone();
         let all_collapsed = !self.repository_sections.is_empty()
             && self
                 .repository_sections
@@ -9497,10 +9511,11 @@ impl GitPanel {
             .map(|(repository_id, _)| *repository_id)
             .collect::<Vec<_>>();
 
-        v_flex()
+        let sections = v_flex()
             .id("multi-repo-git-panel")
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(&scroll_handle)
             .bg(cx.theme().colors().panel_background)
             .child(
                 h_flex()
@@ -9773,7 +9788,13 @@ impl GitPanel {
                                 this.child(div().w_full().overflow_hidden().child(panel))
                             })
                     }),
-            )
+            );
+
+        div()
+            .size_full()
+            .relative()
+            .child(sections)
+            .vertical_scrollbar_for(&scroll_handle, window, cx)
             .into_any_element()
     }
 }
@@ -9784,7 +9805,7 @@ impl Render for GitPanel {
             && GitPanelSettings::get_global(cx).multi_repo
             && self.repository_sections.len() > 1
         {
-            return self.render_repository_sections(cx);
+            return self.render_repository_sections(window, cx);
         }
 
         let project = self.project.read(cx);

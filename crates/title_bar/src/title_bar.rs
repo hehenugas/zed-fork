@@ -1254,14 +1254,6 @@ impl TitleBar {
         };
         let toggles = [
             (
-                "toggle-threads-sidebar",
-                IconName::ChatSparkle,
-                IconName::ChatSparkleFilled,
-                "Toggle Threads Sidebar",
-                sidebar_open,
-                ToggleWorkspaceSidebar.boxed_clone(),
-            ),
-            (
                 "toggle-left-dock",
                 IconName::PanelLeft,
                 IconName::PanelLeftFilled,
@@ -1284,6 +1276,14 @@ impl TitleBar {
                 "Toggle Right Dock",
                 dock_is_open(DockPosition::Right),
                 ToggleRightDock.boxed_clone(),
+            ),
+            (
+                "toggle-threads-sidebar",
+                IconName::ChatSparkle,
+                IconName::ChatSparkleFilled,
+                "Toggle Threads Sidebar",
+                sidebar_open,
+                ToggleWorkspaceSidebar.boxed_clone(),
             ),
         ];
         Some(h_flex().gap_0p5().children(toggles.into_iter().map(

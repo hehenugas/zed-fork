@@ -391,6 +391,9 @@ impl ThreadEntry {
 
 const COLLAPSED_ROW_LIMIT: usize = 5;
 
+/// Nests thread rows under their folder header.
+const THREAD_ROW_INDENT: Pixels = px(16.);
+
 #[derive(Clone)]
 enum ListEntry {
     ProjectHeader {
@@ -2287,10 +2290,16 @@ impl Sidebar {
                     cx,
                 )
             }
-            ListEntry::Thread(thread) => self.render_thread(ix, thread, is_active, is_selected, cx),
-            ListEntry::Terminal(terminal) => {
-                self.render_terminal(ix, terminal, is_active, is_selected, cx)
-            }
+            ListEntry::Thread(thread) => div()
+                .w_full()
+                .pl(THREAD_ROW_INDENT)
+                .child(self.render_thread(ix, thread, is_active, is_selected, cx))
+                .into_any_element(),
+            ListEntry::Terminal(terminal) => div()
+                .w_full()
+                .pl(THREAD_ROW_INDENT)
+                .child(self.render_terminal(ix, terminal, is_active, is_selected, cx))
+                .into_any_element(),
             ListEntry::ShowMore {
                 key,
                 hidden_count,
@@ -7562,6 +7571,7 @@ impl Sidebar {
     fn render_sidebar_bottom_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let is_archive = matches!(self.view, SidebarView::Archive(..));
         let on_right = self.side(cx) == SidebarSide::Right;
+        let island_layout = workspace::WorkspaceSettings::get_global(cx).island_layout;
 
         h_flex()
             .p_1()
@@ -7569,8 +7579,19 @@ impl Sidebar {
             .when(on_right, |this| this.flex_row_reverse())
             .border_t_1()
             .border_color(cx.theme().colors().border)
-            .child(self.render_sidebar_toggle_button(cx))
-            .child(
+            // The island layout has its own sidebar toggle in the title bar and
+            // thread history in the popover, so these two would be duplicates.
+            .when(!island_layout, |this| {
+                this.child(self.render_sidebar_toggle_button(cx))
+                    .child(self.render_history_button(is_archive, cx))
+            })
+            .child(div().flex_1())
+            .child(self.render_recent_projects_button(cx))
+    }
+
+    fn render_history_button(&self, is_archive: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        {
+            {
                 IconButton::new("history", IconName::Clock)
                     .icon_size(IconSize::Small)
                     .toggle_state(is_archive)
@@ -7584,10 +7605,9 @@ impl Sidebar {
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_archive(&ToggleThreadHistory, window, cx);
-                    })),
-            )
-            .child(div().flex_1())
-            .child(self.render_recent_projects_button(cx))
+                    }))
+            }
+        }
     }
 
     fn active_workspace(&self, cx: &App) -> Option<Entity<Workspace>> {
