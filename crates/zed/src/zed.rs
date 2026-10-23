@@ -599,6 +599,11 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             }
         });
 
+        let project_status_item = workspace
+            .titlebar_item()
+            .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
+            .map(|title_bar| cx.new(|cx| title_bar::ProjectStatusItem::new(title_bar, cx)));
+
         let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
         let diagnostic_summary =
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
@@ -632,6 +637,9 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let merge_conflict_indicator =
             cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
         workspace.status_bar().update(cx, |status_bar, cx| {
+            if let Some(project_status_item) = project_status_item {
+                status_bar.add_left_item(project_status_item, window, cx);
+            }
             status_bar.add_left_item(search_button, window, cx);
             status_bar.add_left_item(lsp_button, window, cx);
             status_bar.add_left_item(diagnostic_summary, window, cx);

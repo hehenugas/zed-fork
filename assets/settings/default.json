@@ -636,7 +636,7 @@
     // Whether to show the sign in button in the titlebar.
     "show_sign_in": true,
     // Whether to show the menus in the titlebar.
-    "show_menus": false,
+    "show_menus": true,
     // Whether to open the menus in the titlebar on hover.
     "open_menus_on_hover": false,
     // The layout of window control buttons in the title bar (Linux only).

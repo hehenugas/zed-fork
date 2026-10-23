@@ -54,7 +54,8 @@ use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
     AccessibleMode, MultiWorkspace, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
-    ToggleWorkspaceSidebar, ToggleWorktreeSecurity, Workspace, WorkspaceSettings,
+    HideStatusItem, ItemHandle, StatusItemView, ToggleWorkspaceSidebar, ToggleWorktreeSecurity,
+    Workspace, WorkspaceSettings,
     dock::{Dock, DockPosition},
     notifications::{NotifyResultExt, NotifyTaskExt as _},
 };
@@ -252,75 +253,17 @@ impl Render for TitleBar {
 
         let mut children = <ArrayVec<_, 5>>::new();
 
-        let mut project_name = None;
-        let mut repository = None;
-        let mut linked_worktree_name = None;
-        if let Some(worktree) = self.effective_active_worktree(cx) {
-            repository = self.get_repository_for_worktree(&worktree, cx);
-            let worktree_abs_path = worktree.read(cx).abs_path();
-            project_name = worktree
-                .read(cx)
-                .root_name()
-                .file_name()
-                .map(|name| SharedString::from(name.to_string()));
-            if let Some(repo) = &repository {
-                let repo = repo.read(cx);
-                let identity = repo_identity_path(&repo.common_dir_abs_path, repo.path_style);
-                let identity_fallback =
-                    repo_identity_path_if_local(&repo.common_dir_abs_path, repo.path_style);
-                linked_worktree_name = linked_worktree_name_anchor(
-                    repo.main_worktree_abs_path(),
-                    identity_fallback,
-                    repo.is_linked_worktree(),
-                )
-                .and_then(|name_anchor_path| {
-                    linked_worktree_short_name(
-                        name_anchor_path,
-                        repo.work_directory_abs_path.as_ref(),
-                        repo.path_style,
-                    )
-                })
-                .or_else(|| {
-                    repo.is_linked_worktree()
-                        .then_some(project_name.clone())
-                        .flatten()
-                });
-
-                let display_name = if identity.extension() == Some(std::ffi::OsStr::new("git")) {
-                    identity.file_stem()
-                } else {
-                    repo.path_style.file_name(identity)
-                };
-
-                if let Some(repo_name) = display_name.and_then(|n| n.to_str()) {
-                    let visible_worktrees_in_repo = self.visible_worktrees_in_repository(repo, cx);
-                    let name = if visible_worktrees_in_repo == 1 {
-                        if let Ok(relative) =
-                            worktree_abs_path.strip_prefix(&*repo.work_directory_abs_path)
-                        {
-                            if relative.as_os_str().is_empty() {
-                                repo_name.to_string()
-                            } else {
-                                format!("{}/{}", repo_name, relative.display())
-                            }
-                        } else {
-                            repo_name.to_string()
-                        }
-                    } else {
-                        repo_name.to_string()
-                    };
-                    project_name = Some(SharedString::from(name));
-                }
-            }
-        }
+        let island_layout = WorkspaceSettings::get_global(cx).island_layout;
+        let (project_name, repository, linked_worktree_name) = self.project_info(cx);
 
         children.push(
             h_flex()
                 .h_full()
                 .gap_0p5()
                 .map(|title_bar| {
-                    let mut render_project_items = title_bar_settings.show_branch_name
-                        || title_bar_settings.show_project_items;
+                    let mut render_project_items = !island_layout
+                        && (title_bar_settings.show_branch_name
+                            || title_bar_settings.show_project_items);
                     title_bar
                         .when_some(
                             self.application_menu.clone().filter(|_| !show_menus),
@@ -812,6 +755,114 @@ impl TitleBar {
                             .log_err();
                     })
                 })
+                .into_any_element(),
+        )
+    }
+
+    fn project_info(
+        &self,
+        cx: &App,
+    ) -> (
+        Option<SharedString>,
+        Option<Entity<project::git_store::Repository>>,
+        Option<SharedString>,
+    ) {
+        let mut project_name = None;
+        let mut repository = None;
+        let mut linked_worktree_name = None;
+        if let Some(worktree) = self.effective_active_worktree(cx) {
+            repository = self.get_repository_for_worktree(&worktree, cx);
+            let worktree_abs_path = worktree.read(cx).abs_path();
+            project_name = worktree
+                .read(cx)
+                .root_name()
+                .file_name()
+                .map(|name| SharedString::from(name.to_string()));
+            if let Some(repo) = &repository {
+                let repo = repo.read(cx);
+                let identity = repo_identity_path(&repo.common_dir_abs_path, repo.path_style);
+                let identity_fallback =
+                    repo_identity_path_if_local(&repo.common_dir_abs_path, repo.path_style);
+                linked_worktree_name = linked_worktree_name_anchor(
+                    repo.main_worktree_abs_path(),
+                    identity_fallback,
+                    repo.is_linked_worktree(),
+                )
+                .and_then(|name_anchor_path| {
+                    linked_worktree_short_name(
+                        name_anchor_path,
+                        repo.work_directory_abs_path.as_ref(),
+                        repo.path_style,
+                    )
+                })
+                .or_else(|| {
+                    repo.is_linked_worktree()
+                        .then_some(project_name.clone())
+                        .flatten()
+                });
+
+                let display_name = if identity.extension() == Some(std::ffi::OsStr::new("git")) {
+                    identity.file_stem()
+                } else {
+                    repo.path_style.file_name(identity)
+                };
+
+                if let Some(repo_name) = display_name.and_then(|n| n.to_str()) {
+                    let visible_worktrees_in_repo = self.visible_worktrees_in_repository(repo, cx);
+                    let name = if visible_worktrees_in_repo == 1 {
+                        if let Ok(relative) =
+                            worktree_abs_path.strip_prefix(&*repo.work_directory_abs_path)
+                        {
+                            if relative.as_os_str().is_empty() {
+                                repo_name.to_string()
+                            } else {
+                                format!("{}/{}", repo_name, relative.display())
+                            }
+                        } else {
+                            repo_name.to_string()
+                        }
+                    } else {
+                        repo_name.to_string()
+                    };
+                    project_name = Some(SharedString::from(name));
+                }
+            }
+        }
+
+        (project_name, repository, linked_worktree_name)
+    }
+
+    /// Project name and branch controls. With the island layout they live in the
+    /// status bar (see [`ProjectStatusItem`]) instead of the title bar.
+    fn render_project_items(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let title_bar_settings = *TitleBarSettings::get_global(cx);
+        if !title_bar_settings.show_branch_name && !title_bar_settings.show_project_items {
+            return None;
+        }
+        let is_git_enabled = ProjectSettings::get_global(cx).git.enabled.status;
+        let (project_name, repository, linked_worktree_name) = self.project_info(cx);
+        Some(
+            h_flex()
+                .h_full()
+                .gap_0p5()
+                .when(title_bar_settings.show_project_items, |this| {
+                    this.children(self.render_project_host(cx))
+                        .child(self.render_project_name(project_name, window, cx))
+                })
+                .when_some(
+                    repository.filter(|_| is_git_enabled),
+                    |this, repository| {
+                        this.children(self.render_worktree_and_branch(
+                            repository,
+                            linked_worktree_name,
+                            cx,
+                        ))
+                    },
+                )
                 .into_any_element(),
         )
     }
@@ -1575,5 +1626,48 @@ mod tests {
             }),
             Some("plum-warbler".into())
         );
+    }
+}
+
+/// Shows the project name and branch in the status bar when the island layout
+/// moves them out of the title bar. It renders through the [`TitleBar`] because
+/// that is where the project and git state is tracked.
+pub struct ProjectStatusItem {
+    title_bar: Entity<TitleBar>,
+    _subscription: Subscription,
+}
+
+impl ProjectStatusItem {
+    pub fn new(title_bar: Entity<TitleBar>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&title_bar, |_, _, cx| cx.notify());
+        Self {
+            title_bar,
+            _subscription: subscription,
+        }
+    }
+}
+
+impl Render for ProjectStatusItem {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !WorkspaceSettings::get_global(cx).island_layout {
+            return div().into_any_element();
+        }
+        self.title_bar
+            .update(cx, |title_bar, cx| title_bar.render_project_items(window, cx))
+            .unwrap_or_else(|| div().into_any_element())
+    }
+}
+
+impl StatusItemView for ProjectStatusItem {
+    fn set_active_pane_item(
+        &mut self,
+        _active_pane_item: Option<&dyn ItemHandle>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    fn hide_setting(&self, _cx: &App) -> Option<HideStatusItem> {
+        None
     }
 }
