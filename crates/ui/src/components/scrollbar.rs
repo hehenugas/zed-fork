@@ -480,6 +480,11 @@ impl<ScrollHandle: ScrollableHandle> Scrollbars<ScrollHandle> {
         self
     }
 
+    pub fn hide_along(mut self, along: ScrollAxes) -> Self {
+        self.visibility = along.apply_to(self.visibility, ReservedSpace::None);
+        self
+    }
+
     pub fn style(mut self, style: ScrollbarStyle) -> Self {
         self.style = Some(style);
         self

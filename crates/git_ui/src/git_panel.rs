@@ -8346,15 +8346,17 @@ impl GitPanel {
                         }),
                     )
                     .custom_scrollbars(
-                        Scrollbars::for_settings::<GitPanelScrollbarAccessor>()
-                            .tracked_scroll_handle(&self.scroll_handle)
+                        {
+                            let scrollbars = Scrollbars::for_settings::<GitPanelScrollbarAccessor>()
+                                .tracked_scroll_handle(&self.scroll_handle);
                             // Sections are as tall as their content; the container of
                             // all sections owns the vertical scrollbar.
-                            .show_along(if self.repository_override.is_some() {
-                                ScrollAxes::Horizontal
+                            if self.repository_override.is_some() {
+                                scrollbars.hide_along(ScrollAxes::Vertical)
                             } else {
-                                ScrollAxes::Both
-                            })
+                                scrollbars
+                            }
+                        }
                             .with_track_along(
                                 ScrollAxes::Horizontal,
                                 cx.theme().colors().panel_background,
