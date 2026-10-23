@@ -106,10 +106,16 @@ if command -v rustup >/dev/null 2>&1; then
     rustup_installed=true
 fi
 
-# Generate the licenses first, so they can be baked into the binaries
-script/generate-licenses
+# The fork AppImage skips the licenses refresh and the remote server (used only
+# for SSH/WSL remoting) to keep CI builds short.
+fork_fast="${ZED_FORK_FAST:-}"
 
-if "$rustup_installed"; then
+# Generate the licenses first, so they can be baked into the binaries
+if [[ -z "$fork_fast" ]]; then
+    script/generate-licenses
+fi
+
+if "$rustup_installed" && [[ -z "$fork_fast" ]]; then
     rustup target add "$remote_server_triple"
 fi
 
@@ -128,13 +134,15 @@ fi
 # Build binary in release mode
 cargo --config .cargo/bundle-config.toml rustc --release --target "${target_triple}" --package zed --bin zed -- -C linker="$CC" -C llvm-args=-addrsig -C link-arg=-fuse-ld=lld -C link-arg=--ld-path="$lld" -C link-arg=-Wl,--icf=safe
 cargo --config .cargo/bundle-config.toml build --release --target "${target_triple}" --package cli
-# Build remote_server in separate invocation to prevent feature unification from other crates
-# from influencing dynamic libraries required by it.
-if [[ "$remote_server_triple" == "$musl_triple" ]]; then
-    musl_cc_var="CC_$(echo "$remote_server_triple" | tr '-' '_')"
-    export "$musl_cc_var"=musl-gcc
+if [[ -z "$fork_fast" ]]; then
+    # Build remote_server in separate invocation to prevent feature unification from other crates
+    # from influencing dynamic libraries required by it.
+    if [[ "$remote_server_triple" == "$musl_triple" ]]; then
+        musl_cc_var="CC_$(echo "$remote_server_triple" | tr '-' '_')"
+        export "$musl_cc_var"=musl-gcc
+    fi
+    cargo --config .cargo/bundle-config.toml build --release --target "${remote_server_triple}" --package remote_server
 fi
-cargo --config .cargo/bundle-config.toml build --release --target "${remote_server_triple}" --package remote_server
 
 if ! "$skip_sentry"; then
     echo "Uploading zed debug symbols to sentry..."
@@ -163,10 +171,12 @@ fi
 # We use llvm-objcopy because GNU objcopy on older distros (e.g. Ubuntu 20.04)
 # doesn't understand CREL sections produced by newer LLVM.
 llvm-objcopy --only-keep-debug "${target_dir}/${target_triple}/release/zed" "${target_dir}/${target_triple}/release/zed.dbg"
-llvm-objcopy --only-keep-debug "${target_dir}/${remote_server_triple}/release/remote_server" "${target_dir}/${remote_server_triple}/release/remote_server.dbg"
+if [[ -z "$fork_fast" ]]; then
+    llvm-objcopy --only-keep-debug "${target_dir}/${remote_server_triple}/release/remote_server" "${target_dir}/${remote_server_triple}/release/remote_server.dbg"
+fi
 
 # Ensure that remote_server does not depend on libssl nor libcrypto, as we got rid of these deps.
-if ldd "${target_dir}/${remote_server_triple}/release/remote_server" | grep -q 'libcrypto\|libssl'; then
+if [[ -z "$fork_fast" ]] && ldd "${target_dir}/${remote_server_triple}/release/remote_server" | grep -q 'libcrypto\|libssl'; then
     if [[ "$remote_server_triple" == *-musl ]]; then
         echo "Error: remote_server still depends on libssl or libcrypto" && exit 1
     else
@@ -190,7 +200,9 @@ zed_dir="${temp_dir}/zed$suffix.app"
 mkdir -p "${zed_dir}/bin" "${zed_dir}/libexec"
 llvm-objcopy --strip-unneeded "${target_dir}/${target_triple}/release/zed" "${zed_dir}/libexec/zed-editor"
 llvm-objcopy --strip-debug --discard-all "${target_dir}/${target_triple}/release/cli" "${zed_dir}/bin/zed"
-llvm-objcopy --strip-debug --discard-all "${target_dir}/${remote_server_triple}/release/remote_server" "${temp_dir}/remote_server"
+if [[ -z "$fork_fast" ]]; then
+    llvm-objcopy --strip-debug --discard-all "${target_dir}/${remote_server_triple}/release/remote_server" "${temp_dir}/remote_server"
+fi
 
 # Libs
 # Bundle libstdc++ so older supported systems can run binaries built with our
@@ -240,6 +252,9 @@ envsubst < "crates/zed/resources/zed.desktop.in" > "${zed_dir}/share/application
 chmod +x "${zed_dir}/share/applications/$APP_ID.desktop"
 
 # Copy generated licenses so they'll end up in archive too
+if [[ -n "$fork_fast" && ! -f assets/licenses.md ]]; then
+    echo "Third-party licenses are not generated in fast fork builds." > assets/licenses.md
+fi
 cp "assets/licenses.md" "${zed_dir}/licenses.md"
 
 # Create archive out of everything that's in the temp directory
@@ -251,4 +266,6 @@ remove_match="zed(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
 ls "${target_dir}/release" | grep -E ${remove_match} | xargs -d "\n" -I {} rm -f "${target_dir}/release/{}" || true
 tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "zed$suffix.app"
 
-gzip -f --stdout --best "${temp_dir}/remote_server" > "${target_dir}/zed-remote-server-linux-${arch}.gz"
+if [[ -z "$fork_fast" ]]; then
+    gzip -f --stdout --best "${temp_dir}/remote_server" > "${target_dir}/zed-remote-server-linux-${arch}.gz"
+fi

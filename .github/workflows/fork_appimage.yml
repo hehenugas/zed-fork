@@ -25,6 +25,13 @@ jobs:
       # webrtc-sys does not build with the runner's g++ 11.
       CC: clang
       CXX: clang++
+      # Fork builds trade a little runtime speed for much shorter CI: no LTO,
+      # parallel codegen, no debuginfo, incremental, and no remote server.
+      ZED_FORK_FAST: "1"
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_INCREMENTAL: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
