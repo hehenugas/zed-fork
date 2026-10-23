@@ -578,6 +578,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::TerminalDockPosition>(render_dropdown)
         .add_basic_renderer::<settings::DockPosition>(render_dropdown)
         .add_basic_renderer::<settings::SidebarDockPosition>(render_dropdown)
+        .add_basic_renderer::<settings::ThreadsSidebarScope>(render_dropdown)
         .add_basic_renderer::<settings::GitGutterSetting>(render_dropdown)
         .add_basic_renderer::<settings::GitHunkStyleSetting>(render_dropdown)
         .add_basic_renderer::<settings::GitDiffBaseSetting>(render_dropdown)
@@ -4724,7 +4725,12 @@ fn update_settings_file_inner(
         }
         SettingsUiFile::User => {
             // todo(settings_ui) error?
-            SettingsStore::global(cx).update_settings_file(<dyn fs::Fs>::global(cx), update());
+            if file_name.is_some_and(crate::page_data::is_fork_setting) {
+                SettingsStore::global(cx)
+                    .update_fork_settings_file(<dyn fs::Fs>::global(cx), update());
+            } else {
+                SettingsStore::global(cx).update_settings_file(<dyn fs::Fs>::global(cx), update());
+            }
             Ok(())
         }
         SettingsUiFile::Server(_) => unimplemented!(),

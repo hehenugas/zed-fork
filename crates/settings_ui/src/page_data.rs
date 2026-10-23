@@ -79,7 +79,120 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         ai_page(cx),
         network_page(),
         developer_page(cx),
+        fork_page(),
     ]
+}
+
+/// Settings that only exist in this fork. They are stored in `fork_settings.json`,
+/// see `is_fork_setting`.
+const FORK_SETTING_PATHS: &[&str] = &[
+    "activity_bar",
+    "island_layout",
+    "agent.threads_sidebar.scope",
+    "git_panel.multi_repo",
+    "git_panel.hide_clean_repos",
+];
+
+pub(crate) fn is_fork_setting(json_path: &str) -> bool {
+    FORK_SETTING_PATHS.contains(&json_path)
+}
+
+fn fork_page() -> SettingsPage {
+    let mut items: Vec<SettingsPageItem> = Vec::new();
+
+    items.push(SettingsPageItem::SectionHeader("Layout"));
+    items.push(SettingsPageItem::SettingItem(SettingItem {
+        title: "Activity Bar",
+        description: "Show panel buttons in a vertical activity bar beside the window edges instead of in the status bar.",
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("activity_bar"),
+            pick: |settings_content| settings_content.workspace.activity_bar.as_ref(),
+            write: |settings_content, value, _| {
+                settings_content.workspace.activity_bar = value;
+            },
+        }),
+        metadata: None,
+        files: USER,
+    }));
+    items.push(SettingsPageItem::SettingItem(SettingItem {
+        title: "Island Layout",
+        description: "Render the docks and the editor area as separate rounded panels with gaps between them.",
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("island_layout"),
+            pick: |settings_content| settings_content.workspace.island_layout.as_ref(),
+            write: |settings_content, value, _| {
+                settings_content.workspace.island_layout = value;
+            },
+        }),
+        metadata: None,
+        files: USER,
+    }));
+
+    items.push(SettingsPageItem::SectionHeader("Threads Sidebar"));
+    items.push(SettingsPageItem::SettingItem(SettingItem {
+        title: "Threads Scope",
+        description: "Which projects appear in the Threads Sidebar and thread history.",
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("agent.threads_sidebar.scope"),
+            pick: |settings_content| {
+                settings_content
+                    .agent
+                    .as_ref()?
+                    .threads_sidebar
+                    .as_ref()?
+                    .scope
+                    .as_ref()
+            },
+            write: |settings_content, value, _| {
+                settings_content
+                    .agent
+                    .get_or_insert_default()
+                    .threads_sidebar
+                    .get_or_insert_default()
+                    .scope = value;
+            },
+        }),
+        metadata: None,
+        files: USER,
+    }));
+
+    items.push(SettingsPageItem::SectionHeader("Git Panel"));
+    items.push(SettingsPageItem::SettingItem(SettingItem {
+        title: "Multi-Repository",
+        description: "Show every repository as an independent section in the Git panel.",
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("git_panel.multi_repo"),
+            pick: |settings_content| settings_content.git_panel.as_ref()?.multi_repo.as_ref(),
+            write: |settings_content, value, _| {
+                settings_content.git_panel.get_or_insert_default().multi_repo = value;
+            },
+        }),
+        metadata: None,
+        files: USER,
+    }));
+    items.push(SettingsPageItem::SettingItem(SettingItem {
+        title: "Hide Clean Repositories",
+        description: "Hide repositories with no changes when multi-repository is enabled.",
+        field: Box::new(SettingField {
+            organization_override: None,
+            json_path: Some("git_panel.hide_clean_repos"),
+            pick: |settings_content| settings_content.git_panel.as_ref()?.hide_clean_repos.as_ref(),
+            write: |settings_content, value, _| {
+                settings_content.git_panel.get_or_insert_default().hide_clean_repos = value;
+            },
+        }),
+        metadata: None,
+        files: USER,
+    }));
+
+    SettingsPage {
+        title: "Fork",
+        items: items.into_boxed_slice(),
+    }
 }
 
 fn developer_page(cx: &App) -> SettingsPage {

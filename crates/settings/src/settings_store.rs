@@ -639,6 +639,51 @@ impl SettingsStore {
         return rx;
     }
 
+    /// Applies `update` to `fork_settings.json` (not `settings.json`), keeping
+    /// the fork-only keys out of the file that upstream Zed also reads.
+    pub fn update_fork_settings_file(
+        &self,
+        fs: Arc<dyn Fs>,
+        update: impl 'static + Send + FnOnce(&mut SettingsContent, &App),
+    ) {
+        let mut update = Some(update);
+        self.setting_file_updates_tx
+            .unbounded_send(Box::new(move |cx: AsyncApp| {
+                async move {
+                    let fork_settings_path = paths::fork_settings_file().as_path();
+                    let old_text = match fs.load(fork_settings_path).await {
+                        Ok(text) => text,
+                        Err(error)
+                            if error
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                        {
+                            "{}".to_string()
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let new_text = cx.read_global(|store: &SettingsStore, cx| {
+                        store.new_text_for_update_inner(old_text, &mut |content| {
+                            (update.take().expect("called once"))(content, cx)
+                        })
+                    })?;
+                    fs.atomic_write(fork_settings_path.to_path_buf(), new_text.clone())
+                        .await
+                        .with_context(|| {
+                            format!("Failed to write settings to file {fork_settings_path:?}")
+                        })?;
+                    cx.update_global(|store: &mut SettingsStore, cx| {
+                        store.set_fork_settings(&new_text, cx);
+                        cx.refresh_windows();
+                    });
+                    Ok(())
+                }
+                .boxed_local()
+            }))
+            .map_err(|err| anyhow::format_err!("Failed to update fork settings file: {}", err))
+            .log_with_level(log::Level::Warn);
+    }
+
     pub fn update_settings_file(
         &self,
         fs: Arc<dyn Fs>,

@@ -33,7 +33,7 @@ Cara mengisi setelah sinkron:
 ## Perubahan fungsional
 
 ### 1. Setting khusus fork (`fork_settings.json`)
-- File: `~/.config/zed/fork_settings.json`. Di-merge JSON-wise di atas `settings.json`, jadi Settings UI tidak menulis ke file ini (edit manual).
+- File: `~/.config/zed/fork_settings.json`. Di-merge JSON-wise di atas `settings.json`, jadi Halaman "Fork" di Settings UI (paling bawah) membaca dan menulis kelima setting fork di bawah ke file ini lewat `SettingsStore::update_fork_settings_file`; daftar kuncinya di `FORK_SETTING_PATHS` (`crates/settings_ui/src/page_data.rs`), tambahkan di sana setiap ada setting fork baru.
 - `crates/paths/src/paths.rs`: `fork_settings_file()`.
 - `crates/settings/src/settings_store.rs`: `fork_settings_content`, `with_fork_settings`, `set_fork_settings`, watcher kedua; status migrasi selalu `NotNeeded`.
 - `crates/zed/src/zed/migrate.rs`: `should_migrate_settings`/`should_migrate_keymap` selalu `false` (Zed asli tidak bisa membaca format yang sudah dimigrasi).
