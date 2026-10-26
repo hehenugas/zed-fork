@@ -57,6 +57,8 @@ use super::elicitation::{
 };
 use super::*;
 
+const RAIL_VISIBLE_AFTER_SCROLL: Duration = Duration::from_millis(1200);
+
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
 
 #[derive(Default)]
@@ -597,6 +599,10 @@ pub struct ThreadView {
     pub list_state: ListState,
     rail_hovered_entry: Option<usize>,
     rail_tick_widths: HashMap<usize, f32>,
+    rail_pointer_inside: bool,
+    rail_last_scroll: Option<std::time::Instant>,
+    rail_opacity: f32,
+    _rail_hide_task: Task<()>,
     pub session_capabilities: SharedSessionCapabilities,
     pub expanded_tool_call_raw_inputs: HashSet<acp_v1::ToolCallId>,
     collapsed_sandbox_authorization_details: HashSet<acp_v1::ToolCallId>,
@@ -1033,6 +1039,10 @@ impl ThreadView {
             list_state,
             rail_hovered_entry: None,
             rail_tick_widths: HashMap::default(),
+            rail_pointer_inside: false,
+            rail_last_scroll: None,
+            rail_opacity: 0.,
+            _rail_hide_task: Task::ready(()),
             session_capabilities,
             resumed_without_history,
             _subscriptions: subscriptions,
@@ -1108,7 +1118,7 @@ impl ThreadView {
                             });
                         }
                         this.schedule_save(cx);
-                        cx.notify();
+                        this.note_rail_scroll(cx);
                     });
                 });
             });
@@ -6886,6 +6896,17 @@ fn sandbox_network_rows(network: &SandboxNetPolicy) -> Vec<SandboxRow> {
 }
 
 impl ThreadView {
+    fn note_rail_scroll(&mut self, cx: &mut Context<Self>) {
+        self.rail_last_scroll = Some(std::time::Instant::now());
+        self._rail_hide_task = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(RAIL_VISIBLE_AFTER_SCROLL)
+                .await;
+            this.update(cx, |_, cx| cx.notify()).ok();
+        });
+        cx.notify();
+    }
+
     fn render_message_rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         const BASE_WIDTH: f32 = 8.;
         const ACTIVE_WIDTH: f32 = 16.;
@@ -6920,6 +6941,20 @@ impl ThreadView {
 
         let reduce_motion = cx.reduce_motion();
         let mut animating = false;
+        let rail_visible = self.rail_pointer_inside
+            || self.rail_hovered_entry.is_some()
+            || self
+                .rail_last_scroll
+                .is_some_and(|last| last.elapsed() < RAIL_VISIBLE_AFTER_SCROLL);
+        let target_opacity = if rail_visible { 1. } else { 0. };
+        let opacity_difference = target_opacity - self.rail_opacity;
+        if reduce_motion || opacity_difference.abs() < 0.02 {
+            self.rail_opacity = target_opacity;
+        } else {
+            self.rail_opacity += opacity_difference * 0.25;
+            animating = true;
+        }
+        let rail_opacity = self.rail_opacity;
         let mut tick_widths = Vec::with_capacity(user_entries.len());
         for (position, entry_ix) in user_entries.iter().enumerate() {
             let mut target = if active_entry == Some(*entry_ix) {
@@ -6959,6 +6994,11 @@ impl ThreadView {
         Some(
             v_flex()
                 .id("message-rail")
+                .opacity(rail_opacity)
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    this.rail_pointer_inside = *hovered;
+                    cx.notify();
+                }))
                 .absolute()
                 .left_0()
                 .top_0()
@@ -7369,7 +7409,7 @@ impl ThreadView {
                     cx,
                 );
 
-                if let Some(handle) = self
+                let tool_call = if let Some(handle) = self
                     .entry_view_state
                     .read(cx)
                     .entry(entry_ix)
@@ -7378,7 +7418,15 @@ impl ThreadView {
                     tool_call.track_focus(&handle).into_any()
                 } else {
                     tool_call.into_any()
-                }
+                };
+                // Same column as assistant text, so rows line up with chat text.
+                v_flex()
+                    .w_full()
+                    .max_w(rems_from_px(860.0_f32))
+                    .mx_auto()
+                    .pl(px(6.))
+                    .child(tool_call)
+                    .into_any()
             }
             AgentThreadEntry::Elicitation(elicitation_id) => {
                 let thread = self.thread.read(cx);
