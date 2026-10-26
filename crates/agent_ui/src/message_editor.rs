@@ -2047,6 +2047,9 @@ impl Focusable for MessageEditor {
     }
 }
 
+/// Matches editor text to the size assistant replies are rendered at.
+const EDITOR_TO_REPLY_FONT_SCALE: f32 = 0.875;
+
 impl Render for MessageEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -2069,6 +2072,9 @@ impl Render for MessageEditor {
                         .base_text_style;
                 text_style.color = cx.theme().colors().text;
                 text_style.line_height = relative(settings.buffer_line_height.value());
+                // Measured on screen: with the same configured size, editor text renders about
+                // 1.14x wider than assistant replies, so scale it down to match them.
+                text_style.font_size = (settings.agent_ui_font_size(cx) * EDITOR_TO_REPLY_FONT_SCALE).into();
 
                 EditorElement::new(
                     &self.editor,
