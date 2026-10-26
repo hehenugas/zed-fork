@@ -524,7 +524,13 @@ message Envelope {
     ExecuteLspCommandResponse execute_lsp_command_response = 492;
     RefreshDocumentHighlights refresh_document_highlights = 493;
     GetTerminalShell get_terminal_shell = 494;
-    GetTerminalShellResponse get_terminal_shell_response = 495; // current max
+    GetTerminalShellResponse get_terminal_shell_response = 495;
+    LoadCommitDiffBetween load_commit_diff_between = 496;
+    GitCheckoutCommit git_checkout_commit = 497;
+    GitRevertCommit git_revert_commit = 498;
+    GitRebaseOnto git_rebase_onto = 499;
+    GitFormatPatch git_format_patch = 500;
+    GitFormatPatchResponse git_format_patch_response = 501; // current max
   }
 
   reserved 87 to 88;
