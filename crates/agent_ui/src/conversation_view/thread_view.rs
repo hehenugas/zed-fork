@@ -1104,6 +1104,7 @@ impl ThreadView {
                             });
                         }
                         this.schedule_save(cx);
+                        cx.notify();
                     });
                 });
             });
@@ -6881,6 +6882,91 @@ fn sandbox_network_rows(network: &SandboxNetPolicy) -> Vec<SandboxRow> {
 }
 
 impl ThreadView {
+    fn render_message_rail(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        const PREVIEW_CHARACTERS: usize = 240;
+
+        let entries = self.thread.read(cx).entries();
+        let user_messages: Vec<(usize, SharedString)> = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(entry_ix, entry)| match entry {
+                AgentThreadEntry::UserMessage(message) if !message.indented => {
+                    let markdown = message.content.to_markdown(cx);
+                    let preview = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
+                    Some((
+                        entry_ix,
+                        SharedString::from(util::truncate_and_trailoff(&preview, PREVIEW_CHARACTERS)),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        if user_messages.len() < 2 {
+            return None;
+        }
+
+        let scroll_top_ix = self.list_state.logical_scroll_top().item_ix;
+        let active_ix = user_messages
+            .iter()
+            .rev()
+            .find(|(entry_ix, _)| *entry_ix <= scroll_top_ix)
+            .or(user_messages.first())
+            .map(|(entry_ix, _)| *entry_ix);
+        let colors = cx.theme().colors();
+        let active_color = colors.text;
+        let idle_color = colors.text_disabled.opacity(0.6);
+        let popup_background = colors.elevated_surface_background;
+        let popup_border = colors.border;
+        let popup_text = colors.text_muted;
+
+        Some(
+            v_flex()
+                .id("message-rail")
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w_6()
+                .justify_center()
+                .items_start()
+                .children(user_messages.into_iter().map(|(entry_ix, preview)| {
+                    let is_active = active_ix == Some(entry_ix);
+                    h_flex()
+                        .id(("message-rail-tick", entry_ix))
+                        .w_6()
+                        .h(px(10.))
+                        .items_center()
+                        .pl_1()
+                        .cursor_pointer()
+                        .child(
+                            div()
+                                .h(px(2.))
+                                .w(if is_active { px(14.) } else { px(8.) })
+                                .rounded_full()
+                                .bg(if is_active { active_color } else { idle_color }),
+                        )
+                        .tooltip(move |_window, cx| {
+                            let preview = preview.clone();
+                            cx.new(|_| MessageRailPreview {
+                                text: preview,
+                                background: popup_background,
+                                border: popup_border,
+                                text_color: popup_text,
+                            })
+                            .into()
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.list_state.scroll_to(ListOffset {
+                                item_ix: entry_ix,
+                                offset_in_item: px(0.0),
+                            });
+                            cx.notify();
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn render_entries(&mut self, cx: &mut Context<Self>) -> List {
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let centered_container = move |content: AnyElement| {
@@ -13265,6 +13351,34 @@ impl ThreadView {
     }
 }
 
+struct MessageRailPreview {
+    text: SharedString,
+    background: Hsla,
+    border: Hsla,
+    text_color: Hsla,
+}
+
+impl Render for MessageRailPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().pl_2().child(
+            div()
+                .max_w(rems_from_px(360_f32))
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(self.border)
+                .bg(self.background)
+                .shadow_md()
+                .text_sm()
+                .line_height(rems_from_px(20_f32))
+                .text_color(self.text_color)
+                .font_ui(cx)
+                .child(self.text.clone()),
+        )
+    }
+}
+
 impl Render for ThreadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Keep the message editor's local slash commands in sync with the
@@ -13275,7 +13389,14 @@ impl Render for ThreadView {
         let has_messages = self.list_state.item_count() > 0;
         let list_state = self.list_state.clone();
 
+        let message_rail = if has_messages {
+            self.render_message_rail(cx)
+        } else {
+            None
+        };
+
         let conversation = v_flex()
+            .relative()
             .when(self.resumed_without_history, |this| {
                 this.child(Self::render_resume_notice(cx))
             })
@@ -13284,6 +13405,7 @@ impl Render for ThreadView {
                     this.flex_1()
                         .size_full()
                         .child(self.render_entries(cx))
+                        .children(message_rail)
                         .vertical_scrollbar_for(&list_state, window, cx)
                         .into_any()
                 } else {
