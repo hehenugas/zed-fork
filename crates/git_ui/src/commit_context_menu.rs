@@ -520,7 +520,7 @@ fn reset_to_commit(
     );
     window
         .spawn(cx, async move |cx| {
-            if confirmation.await != 0 {
+            if confirmation.await? != 0 {
                 return Ok(());
             }
             repository
@@ -553,7 +553,7 @@ fn rebase_to_commit(
     );
     window
         .spawn(cx, async move |cx| {
-            if confirmation.await != 0 {
+            if confirmation.await? != 0 {
                 return Ok(());
             }
             repository
@@ -616,7 +616,7 @@ fn revert_commit(
                     cx,
                 )
             })?;
-            if prompt.await != 0 {
+            if prompt.await? != 0 {
                 return Ok(());
             }
             repository
@@ -727,7 +727,7 @@ impl Render for CreateBranchAtCommitModal {
             .w(gpui::rems(34.))
             .child(Label::new(format!(
                 "Create branch at {}",
-                self.sha.display_short()
+                self.sha.get(..7).unwrap_or(self.sha.as_ref())
             )))
             .child(div().px_3().py_2().child(self.editor.clone()))
     }

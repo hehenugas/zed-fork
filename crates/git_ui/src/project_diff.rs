@@ -470,7 +470,7 @@ impl Item for ProjectDiff {
     }
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        match self.diff.read(_cx).diff_base() {
+        match self.diff.read(_cx).diff_base(_cx) {
             DiffBase::CommitWorktree { base_ref } => {
                 let base_short = base_ref.get(..7).unwrap_or(base_ref.as_ref());
                 format!("Working Tree vs {base_short}").into()

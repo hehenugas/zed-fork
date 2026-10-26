@@ -280,7 +280,14 @@ impl CommitView {
                                     })
                                     .unwrap();
                                 pane.remove_item(existing.item_id(), false, false, window, cx);
-                                pane.add_item(Box::new(commit_view), true, true, ix, window, cx);
+                                pane.add_item(
+                                    Box::new(commit_view),
+                                    true,
+                                    true,
+                                    Some(ix),
+                                    window,
+                                    cx,
+                                );
                             } else {
                                 pane.add_item(Box::new(commit_view), true, true, None, window, cx);
                             }
