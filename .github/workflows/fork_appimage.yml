@@ -1,7 +1,7 @@
 name: Fork Beta AppImage
 
 # Builds the fork's beta channel as an AppImage so it can be tried locally.
-# Run manually: gh workflow run fork_appimage.yml --ref custom
+# Run manually: gh workflow run fork_appimage.yml --ref custom -f channel=beta|stable
 # Output: a downloadable beta AppImage artifact. Publishing a prerelease is optional.
 
 on:
@@ -12,6 +12,13 @@ on:
         type: boolean
         required: false
         default: false
+      channel:
+        description: beta keeps its own data directory; stable shares data with the installed Zed
+        type: choice
+        options:
+          - beta
+          - stable
+        default: beta
 
 permissions:
   contents: write
@@ -62,22 +69,50 @@ jobs:
       - name: Bundle
         run: script/bundle-linux --skip-sentry
         env:
-          ZED_RELEASE_CHANNEL: preview
+          ZED_RELEASE_CHANNEL: ${{ inputs.channel == 'stable' && 'stable' || 'preview' }}
 
       - name: Build AppImage
+        env:
+          CHANNEL: ${{ inputs.channel || 'beta' }}
         run: |
           set -euxo pipefail
+          if [[ "$CHANNEL" == "stable" ]]; then
+            prefix="zed-fork"
+          else
+            prefix="zed-fork-beta"
+          fi
           tar -xzf "$CARGO_TARGET_DIR/release/zed-linux-x86_64.tar.gz"
           appdir="$(ls -d zed*.app)"
           mv "$appdir" AppDir
           # Host GPU drivers need a newer libstdc++/libxkbcommon than the Ubuntu 22.04 copies.
           rm -f AppDir/lib/libstdc++.so.6 AppDir/lib/libxkbcommon*.so*
           desktop_entry="$(find AppDir/share/applications -maxdepth 1 -name '*.desktop' -print -quit)"
-          sed -i 's/^Name=Zed Fork Preview$/Name=Zed Fork Beta/' "$desktop_entry"
+          if [[ "$CHANNEL" != "stable" ]]; then
+            sed -i 's/^Name=Zed Fork Preview$/Name=Zed Fork Beta/' "$desktop_entry"
+          fi
           cp "$desktop_entry" AppDir/zed.desktop
           cp script/fork-icon/zed-fork-512.png AppDir/zed.png
           cp script/fork-icon/zed-fork-512.png AppDir/share/icons/hicolor/512x512/apps/zed.png
-          cat > AppDir/AppRun <<'RUN'
+          if [[ "$CHANNEL" == "stable" ]]; then
+            cat > AppDir/AppRun <<'RUN'
+          #!/usr/bin/env bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export ZED_UPDATE_EXPLANATION="Updates are disabled in the fork AppImage."
+          # Share Zed's default data/config paths unless the user requests isolation.
+          if [[ -n "${ZED_FORK_USER_DATA_DIR:-}" ]]; then
+            exec "$HERE/libexec/zed-editor" --user-data-dir "$ZED_FORK_USER_DATA_DIR" "$@"
+          fi
+          ZED_FLATPAK_HOME="$HOME/.var/app/dev.zed.Zed"
+          if [[ -d "$ZED_FLATPAK_HOME/config/zed" ]]; then
+            export FLATPAK_XDG_CONFIG_HOME="$ZED_FLATPAK_HOME/config"
+            export FLATPAK_XDG_DATA_HOME="$ZED_FLATPAK_HOME/data"
+            export FLATPAK_XDG_CACHE_HOME="$ZED_FLATPAK_HOME/cache"
+            export FLATPAK_XDG_STATE_HOME="$ZED_FLATPAK_HOME/.local/state"
+          fi
+          exec "$HERE/libexec/zed-editor" "$@"
+          RUN
+          else
+            cat > AppDir/AppRun <<'RUN'
           #!/usr/bin/env bash
           HERE="$(dirname "$(readlink -f "$0")")"
           export ZED_UPDATE_EXPLANATION="Updates are disabled in the fork AppImage."
@@ -87,26 +122,37 @@ jobs:
           fi
           exec "$HERE/libexec/zed-editor" --user-data-dir "$ZED_FORK_USER_DATA_DIR" "$@"
           RUN
+          fi
           chmod +x AppDir/AppRun
           version="$(script/get-crate-version zed)"
-          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "zed-fork-beta_${version}_${GITHUB_RUN_NUMBER}_x86_64.AppImage"
-          sha256sum zed-fork-beta_*.AppImage > SHA256SUMS.txt
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "${prefix}_${version}_${GITHUB_RUN_NUMBER}_x86_64.AppImage"
+          sha256sum "${prefix}"_*.AppImage > SHA256SUMS.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zed-fork-beta-appimage
+          name: zed-fork-${{ inputs.channel || 'beta' }}-appimage
           path: |
-            zed-fork-beta_*.AppImage
+            zed-fork*_*.AppImage
             SHA256SUMS.txt
           compression-level: 0
           retention-days: 7
 
       - name: Publish release
         if: ${{ inputs.publish_release }}
+        env:
+          CHANNEL: ${{ inputs.channel || 'beta' }}
         run: |
-          tag="fork-beta-${GITHUB_RUN_NUMBER}"
-          gh release create "$tag" zed-fork-beta_*.AppImage SHA256SUMS.txt \
+          if [[ "$CHANNEL" == "stable" ]]; then
+            tag="fork-${GITHUB_RUN_NUMBER}"
+            title="Zed fork ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})"
+            asset="zed-fork_*.AppImage"
+          else
+            tag="fork-beta-${GITHUB_RUN_NUMBER}"
+            title="Zed Fork Beta ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})"
+            asset="zed-fork-beta_*.AppImage"
+          fi
+          gh release create "$tag" $asset SHA256SUMS.txt \
             --target "$GITHUB_SHA" --prerelease \
-            --title "Zed Fork Beta ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})" \
+            --title "$title" \
             --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}"
