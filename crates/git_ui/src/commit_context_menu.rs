@@ -218,48 +218,56 @@ pub(crate) fn commit_context_menu(
                 let repository_for_worktree = repository.clone();
                 let workspace_for_worktree = workspace.clone();
                 move |menu, _window, _cx| {
-                    menu.entry("Compare with HEAD", None, move |window, cx| {
-                        let Some(repository) =
-                            repository_for_head.as_ref().and_then(WeakEntity::upgrade)
-                        else {
-                            return;
-                        };
-                        CommitView::open_compare(
-                            head_sha.clone(),
-                            "HEAD".to_string(),
-                            repository.downgrade(),
-                            workspace_for_head.clone(),
-                            window,
-                            cx,
-                        );
-                    })
-                    .entry("Compare HEAD with this Commit", None, move |window, cx| {
-                        let Some(repository) = repository_for_reverse
-                            .as_ref()
-                            .and_then(WeakEntity::upgrade)
-                        else {
-                            return;
-                        };
-                        CommitView::open_compare(
-                            "HEAD".to_string(),
-                            reverse_head_sha.clone(),
-                            repository.downgrade(),
-                            workspace_for_reverse.clone(),
-                            window,
-                            cx,
-                        );
-                    })
-                    .entry(
-                        "Compare with Working Tree",
-                        None,
+                    menu.entry("Compare with HEAD", None, {
+                        let repository = repository_for_head.clone();
+                        let workspace = workspace_for_head.clone();
+                        let head_sha = head_sha.clone();
                         move |window, cx| {
-                            let Some(repository) = repository_for_worktree
-                                .as_ref()
-                                .and_then(WeakEntity::upgrade)
+                            let Some(repository) =
+                                repository.as_ref().and_then(WeakEntity::upgrade)
                             else {
                                 return;
                             };
-                            workspace_for_worktree
+                            CommitView::open_compare(
+                                head_sha.clone(),
+                                "HEAD".to_string(),
+                                repository.downgrade(),
+                                workspace.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    })
+                    .entry("Compare HEAD with this Commit", None, {
+                        let repository = repository_for_reverse.clone();
+                        let workspace = workspace_for_reverse.clone();
+                        let head_sha = reverse_head_sha.clone();
+                        move |window, cx| {
+                            let Some(repository) =
+                                repository.as_ref().and_then(WeakEntity::upgrade)
+                            else {
+                                return;
+                            };
+                            CommitView::open_compare(
+                                "HEAD".to_string(),
+                                head_sha.clone(),
+                                repository.downgrade(),
+                                workspace.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    })
+                    .entry("Compare with Working Tree", None, {
+                        let repository = repository_for_worktree.clone();
+                        let workspace = workspace_for_worktree.clone();
+                        move |window, cx| {
+                            let Some(repository) =
+                                repository.as_ref().and_then(WeakEntity::upgrade)
+                            else {
+                                return;
+                            };
+                            workspace
                                 .update(cx, |workspace, cx| {
                                     ProjectDiff::deploy_at_commit_worktree(
                                         workspace,
@@ -270,8 +278,8 @@ pub(crate) fn commit_context_menu(
                                     );
                                 })
                                 .log_err();
-                        },
-                    )
+                        }
+                    })
                 }
             })
             .when_some(git_graph.clone(), |menu, git_graph| {
@@ -332,23 +340,29 @@ pub(crate) fn commit_context_menu(
                     let repository_for_soft = repository.clone();
                     let repository_for_mixed = repository.clone();
                     move |menu, _window, _cx| {
-                        menu.entry("Soft…", None, move |window, cx| {
-                            reset_to_commit(
-                                sha,
-                                ResetMode::Soft,
-                                repository_for_soft.clone(),
-                                window,
-                                cx,
-                            );
+                        menu.entry("Soft…", None, {
+                            let repository = repository_for_soft.clone();
+                            move |window, cx| {
+                                reset_to_commit(
+                                    sha,
+                                    ResetMode::Soft,
+                                    repository.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }
                         })
-                        .entry("Mixed…", None, move |window, cx| {
-                            reset_to_commit(
-                                sha,
-                                ResetMode::Mixed,
-                                repository_for_mixed.clone(),
-                                window,
-                                cx,
-                            );
+                        .entry("Mixed…", None, {
+                            let repository = repository_for_mixed.clone();
+                            move |window, cx| {
+                                reset_to_commit(
+                                    sha,
+                                    ResetMode::Mixed,
+                                    repository.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }
                         })
                     }
                 })
@@ -422,11 +436,14 @@ pub(crate) fn commit_context_menu(
                 let browse_url = url.clone();
                 let share_url = url.clone();
                 menu.submenu("Browse", move |menu, _window, _cx| {
+                    let browse_url = browse_url.clone();
+                    let provider = provider.clone();
                     menu.entry(format!("Open Commit on {provider}"), None, move |_, cx| {
                         cx.open_url(&browse_url);
                     })
                 })
                 .submenu("Share", move |menu, _window, _cx| {
+                    let share_url = share_url.clone();
                     menu.entry("Copy Commit Link", None, move |_, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(share_url.clone()));
                     })
