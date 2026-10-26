@@ -7784,17 +7784,13 @@ impl Sidebar {
             return;
         };
 
-        let settings = AgentSettings::get_global(cx).threads_sidebar;
-        let history_paths = (settings.scope == settings::ThreadsSidebarScope::CurrentProject)
-            .then(|| {
-                multi_workspace
-                    .read(cx)
-                    .project_groups(cx)
-                    .into_iter()
-                    .find(|group| group.workspaces.contains(&active_workspace))
-                    .map(|group| group.key.path_list().clone())
-            })
-            .flatten();
+        // History always lists the active workspace's threads, whatever `scope` the sidebar uses.
+        let history_paths = multi_workspace
+            .read(cx)
+            .project_groups(cx)
+            .into_iter()
+            .find(|group| group.workspaces.contains(&active_workspace))
+            .map(|group| group.key.path_list().clone());
 
         let agent_server_store = active_workspace
             .read(cx)

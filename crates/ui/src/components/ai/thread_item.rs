@@ -248,6 +248,19 @@ impl ThreadItem {
     }
 }
 
+/// Agent logos are monochrome masks, so a brand tint is the only way to tell them apart by color.
+fn brand_icon_color(icon: IconName) -> Option<Color> {
+    let hex = match icon {
+        IconName::AiClaude | IconName::AiAnthropic => 0xD97757,
+        IconName::AiOpenAi | IconName::AiOpenAiGptSub | IconName::AiOpenAiCompat => 0x10A37F,
+        IconName::AiGemini | IconName::AiGoogle => 0x6C9CFF,
+        IconName::AiDeepSeek => 0x4D6BFE,
+        IconName::AiMistral => 0xFA520F,
+        _ => return None,
+    };
+    Some(Color::Custom(gpui::rgb(hex).into()))
+}
+
 impl RenderOnce for ThreadItem {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let color = cx.theme().colors();
@@ -292,7 +305,10 @@ impl RenderOnce for ThreadItem {
                 .justify_center()
                 .when(!icon_visible, |this| this.invisible())
         };
-        let icon_color = self.icon_color.unwrap_or(Color::Muted);
+        let icon_color = self
+            .icon_color
+            .or_else(|| brand_icon_color(self.icon))
+            .unwrap_or(Color::Muted);
         let agent_icon = if let Some(icon_char) = self.icon_char {
             Label::new(icon_char)
                 .size(LabelSize::Small)
@@ -332,20 +348,19 @@ impl RenderOnce for ThreadItem {
             None
         };
 
-        let icon = if self.status == AgentThreadStatus::Running {
-            icon_container()
-                .child(
-                    Icon::new(IconName::LoadCircle)
-                        .size(IconSize::Small)
-                        .color(Color::Muted)
-                        .with_rotate_animation(2),
-                )
-                .into_any_element()
-        } else if let Some(status_icon) = status_icon {
-            icon_container().child(status_icon).into_any_element()
+        // The agent logo stays put; running and status markers sit at the right edge.
+        let status_indicator = if self.status == AgentThreadStatus::Running {
+            Some(
+                Icon::new(IconName::LoadCircle)
+                    .size(IconSize::Small)
+                    .color(Color::Muted)
+                    .with_rotate_animation(2)
+                    .into_any_element(),
+            )
         } else {
-            icon_container().child(agent_icon).into_any_element()
+            status_icon.map(|status_icon| status_icon.into_any_element())
         };
+        let icon = icon_container().child(agent_icon).into_any_element();
 
         let title = self.title;
         let highlight_positions = self.highlight_positions;
@@ -457,6 +472,15 @@ impl RenderOnce for ThreadItem {
                     )
                     .when(self.is_truncated && opaque_window, |this| {
                         this.child(gradient_overlay)
+                    })
+                    .when_some(status_indicator, |this, indicator| {
+                        this.child(
+                            h_flex()
+                                .flex_none()
+                                .size_4()
+                                .justify_center()
+                                .child(indicator),
+                        )
                     })
                     .when(self.hovered, |this| {
                         this.when_some(self.action_slot, |this, slot| {

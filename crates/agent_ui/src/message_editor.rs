@@ -26,7 +26,7 @@ use futures::{FutureExt as _, future::join_all};
 use gpui::{
     AppContext, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, Image, ImageFormat, KeyContext, SharedString, Subscription, Task, TaskExt,
-    TextStyle, WeakEntity,
+    WeakEntity,
 };
 use language::{Buffer, language_settings::InlayHintKind};
 use parking_lot::RwLock;
@@ -2048,7 +2048,7 @@ impl Focusable for MessageEditor {
 }
 
 impl Render for MessageEditor {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .key_context("MessageEditor")
             .on_action(cx.listener(Self::chat))
@@ -2063,16 +2063,12 @@ impl Render for MessageEditor {
             .child({
                 let settings = ThemeSettings::get_global(cx);
 
-                let text_style = TextStyle {
-                    color: cx.theme().colors().text,
-                    font_family: settings.agent_ui_font_family().clone(),
-                    font_fallbacks: settings.ui_font.fallbacks.clone(),
-                    font_features: settings.ui_font.features.clone(),
-                    font_size: settings.agent_ui_font_size(cx).into(),
-                    font_weight: settings.ui_font.weight,
-                    line_height: relative(settings.buffer_line_height.value()),
-                    ..Default::default()
-                };
+                // Start from the style assistant replies use so both render the same font and size.
+                let mut text_style =
+                    markdown::MarkdownStyle::themed(markdown::MarkdownFont::Agent, window, cx)
+                        .base_text_style;
+                text_style.color = cx.theme().colors().text;
+                text_style.line_height = relative(settings.buffer_line_height.value());
 
                 EditorElement::new(
                     &self.editor,
