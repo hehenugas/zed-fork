@@ -6989,6 +6989,7 @@ impl ThreadView {
                                         idle_color
                                     }),
                             )
+                            .tooltip_show_delay(Duration::from_millis(80))
                             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                 if *hovered {
                                     this.rail_hovered_entry = Some(entry_ix);
