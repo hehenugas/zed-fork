@@ -20,6 +20,7 @@ pub struct TerminalToolHeader {
     hover_group: SharedString,
     summary: SharedString,
     is_expanded: bool,
+    flush: bool,
     elapsed: Option<Duration>,
     running: bool,
     truncated_tooltip: Option<SharedString>,
@@ -43,6 +44,7 @@ impl TerminalToolHeader {
             hover_group: hover_group.into(),
             summary: summary.into(),
             is_expanded,
+            flush: false,
             elapsed: None,
             running: false,
             truncated_tooltip: None,
@@ -53,6 +55,12 @@ impl TerminalToolHeader {
             on_stop: None,
             command_slot: None,
         }
+    }
+
+    /// Drops the horizontal padding so a collapsed header lines up with plain tool call rows.
+    pub fn flush(mut self, flush: bool) -> Self {
+        self.flush = flush;
+        self
     }
 
     pub fn elapsed(mut self, elapsed: Duration) -> Self {
@@ -114,6 +122,7 @@ impl RenderOnce for TerminalToolHeader {
             hover_group,
             summary,
             is_expanded,
+            flush,
             elapsed,
             running,
             truncated_tooltip,
@@ -132,7 +141,8 @@ impl RenderOnce for TerminalToolHeader {
         let header_row = h_flex()
             .id(child_id("header"))
             .items_center()
-            .px_3()
+            .when(flush, |this| this.px_0p5())
+            .when(!flush, |this| this.px_3())
             .py_2()
             .flex_none()
             .gap_2()

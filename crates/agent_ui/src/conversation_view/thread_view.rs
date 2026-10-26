@@ -8909,6 +8909,7 @@ impl ThreadView {
             command_summary,
             is_expanded,
         )
+        .flush(!(is_expanded || needs_confirmation))
         .elapsed(time_elapsed)
         .running(!command_finished && !needs_confirmation)
         .on_toggle_expand(cx.listener({
@@ -8964,7 +8965,8 @@ impl ThreadView {
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
                 this.my_1p5()
-                    .mx_5()
+                    .when(is_card, |card| card.ml(px(5.)).mr(px(9.)))
+                    .when(!is_card, |row| row.ml_4().mr_5())
                     .when(is_card, |card| {
                         card.border_1()
                             .when(failed, |card| card.border_dashed())
