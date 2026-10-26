@@ -4934,6 +4934,100 @@ impl ThreadView {
         )
     }
 
+    fn render_active_subagents(&self, cx: &Context<Self>) -> Option<Div> {
+        if self.is_subagent() {
+            return None;
+        }
+
+        let thread = self.thread.read(cx);
+        let active_subagents = thread
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let AgentThreadEntry::ToolCall(tool_call) = entry else {
+                    return None;
+                };
+                if !matches!(
+                    tool_call.status(),
+                    ToolCallStatus::Pending
+                        | ToolCallStatus::InProgress
+                        | ToolCallStatus::WaitingForConfirmation
+                ) {
+                    return None;
+                }
+
+                let session_id = tool_call.subagent_session_info.as_ref()?.session_id.clone();
+                let thread_title = self
+                    .server_view
+                    .upgrade()
+                    .and_then(|server_view| {
+                        server_view
+                            .read(cx)
+                            .as_connected()
+                            .and_then(|connected| connected.threads.get(&session_id))
+                            .and_then(|thread_view| thread_view.read(cx).thread.read(cx).title())
+                    })
+                    .filter(|title| !title.is_empty());
+                let title = thread_title.unwrap_or_else(|| {
+                    let label = tool_call.label.read(cx).source().trim().to_string();
+                    if label.is_empty() {
+                        "Subagent".into()
+                    } else {
+                        label.into()
+                    }
+                });
+
+                Some((session_id, title))
+            })
+            .collect::<Vec<_>>();
+
+        if active_subagents.is_empty() {
+            return None;
+        }
+
+        let active_count = active_subagents.len();
+        let server_view = self.server_view.clone();
+
+        Some(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .border_b_1()
+                .border_color(cx.theme().colors().border)
+                .bg(cx.theme().colors().editor_background.opacity(0.2))
+                .child(
+                    Label::new(format!("Agents running ({active_count})"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .children(active_subagents.into_iter().map(|(session_id, title)| {
+                    let server_view = server_view.clone();
+                    let tooltip = format!("View subagent: {title}");
+                    h_flex()
+                        .id(format!("running-subagent-{session_id}"))
+                        .min_w_0()
+                        .gap_1p5()
+                        .px_1p5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(cx.theme().colors().element_hover))
+                        .child(SpinnerLabel::new().size(LabelSize::Small))
+                        .child(Label::new(title).size(LabelSize::Small).truncate())
+                        .tooltip(Tooltip::text(tooltip))
+                        .on_click(move |_, window, cx| {
+                            server_view
+                                .update(cx, |server_view, cx| {
+                                    server_view.navigate_to_thread(session_id.clone(), window, cx);
+                                })
+                                .ok();
+                        })
+                })),
+        )
+    }
+
     pub(crate) fn render_message_editor(
         &mut self,
         window: &mut Window,
@@ -13503,6 +13597,7 @@ impl Render for ThreadView {
             }))
             .size_full()
             .children(self.render_subagent_titlebar(cx))
+            .children(self.render_active_subagents(cx))
             .when_some(
                 self.thread_search_visible
                     .then(|| self.thread_search_bar.clone())

@@ -1,11 +1,17 @@
-name: Fork AppImage
+name: Fork Beta AppImage
 
-# Builds the fork as an AppImage so it can be tried locally.
+# Builds the fork's beta channel as an AppImage so it can be tried locally.
 # Run manually: gh workflow run fork_appimage.yml --ref custom
-# Output: a prerelease tagged `fork-<run number>` with the AppImage attached.
+# Output: a downloadable beta AppImage artifact. Publishing a prerelease is optional.
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the AppImage as a GitHub prerelease
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -55,6 +61,8 @@ jobs:
 
       - name: Bundle
         run: script/bundle-linux --skip-sentry
+        env:
+          ZED_RELEASE_CHANNEL: preview
 
       - name: Build AppImage
         run: |
@@ -64,7 +72,9 @@ jobs:
           mv "$appdir" AppDir
           # Host GPU drivers need a newer libstdc++/libxkbcommon than the Ubuntu 22.04 copies.
           rm -f AppDir/lib/libstdc++.so.6 AppDir/lib/libxkbcommon*.so*
-          cp AppDir/share/applications/*.desktop AppDir/zed.desktop
+          desktop_entry="$(find AppDir/share/applications -maxdepth 1 -name '*.desktop' -print -quit)"
+          sed -i 's/^Name=Zed Fork Preview$/Name=Zed Fork Beta/' "$desktop_entry"
+          cp "$desktop_entry" AppDir/zed.desktop
           cp script/fork-icon/zed-fork-512.png AppDir/zed.png
           cp script/fork-icon/zed-fork-512.png AppDir/share/icons/hicolor/512x512/apps/zed.png
           cat > AppDir/AppRun <<'RUN'
@@ -86,23 +96,24 @@ jobs:
           RUN
           chmod +x AppDir/AppRun
           version="$(script/get-crate-version zed)"
-          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "zed-fork_${version}_${GITHUB_RUN_NUMBER}_x86_64.AppImage"
-          sha256sum zed-fork_*.AppImage > SHA256SUMS.txt
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "zed-fork-beta_${version}_${GITHUB_RUN_NUMBER}_x86_64.AppImage"
+          sha256sum zed-fork-beta_*.AppImage > SHA256SUMS.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zed-fork-appimage
+          name: zed-fork-beta-appimage
           path: |
-            zed-fork_*.AppImage
+            zed-fork-beta_*.AppImage
             SHA256SUMS.txt
           compression-level: 0
           retention-days: 7
 
       - name: Publish release
+        if: ${{ inputs.publish_release }}
         run: |
-          tag="fork-${GITHUB_RUN_NUMBER}"
-          gh release create "$tag" zed-fork_*.AppImage SHA256SUMS.txt \
+          tag="fork-beta-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" zed-fork-beta_*.AppImage SHA256SUMS.txt \
             --target "$GITHUB_SHA" --prerelease \
-            --title "Zed fork ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})" \
+            --title "Zed Fork Beta ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})" \
             --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}"
