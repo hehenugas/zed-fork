@@ -508,7 +508,7 @@ fn start_worktree_creations(
                     } else {
                         None
                     }
-                })?;
+                });
             if let Some(selected_path) = selected_path {
                 selected_commit_paths.insert(selected_path?);
             }
