@@ -595,6 +595,8 @@ pub struct ThreadView {
     pub last_token_limit_telemetry: Option<acp_thread::TokenUsageRatio>,
     thread_feedback: ThreadFeedbackState,
     pub list_state: ListState,
+    rail_hovered_entry: Option<usize>,
+    rail_tick_widths: HashMap<usize, f32>,
     pub session_capabilities: SharedSessionCapabilities,
     pub expanded_tool_call_raw_inputs: HashSet<acp_v1::ToolCallId>,
     collapsed_sandbox_authorization_details: HashSet<acp_v1::ToolCallId>,
@@ -1029,6 +1031,8 @@ impl ThreadView {
             model_selector,
             profile_selector,
             list_state,
+            rail_hovered_entry: None,
+            rail_tick_widths: HashMap::default(),
             session_capabilities,
             resumed_without_history,
             _subscriptions: subscriptions,
@@ -5070,7 +5074,7 @@ impl ThreadView {
 
         h_flex()
             .px_3()
-            .py_2()
+            .py_1p5()
             .bg(cx.theme().colors().panel_background)
             .justify_center()
             .on_action(cx.listener(Self::handle_message_editor_move_up))
@@ -5093,13 +5097,13 @@ impl ThreadView {
                     .flex_shrink_1()
                     .flex_grow_0()
                     .justify_between()
-                    .gap_2()
-                    .rounded_lg()
+                    .gap_1()
+                    .rounded(px(18.))
                     .border_1()
                     .border_color(cx.theme().colors().border_variant)
                     .bg(cx.theme().colors().element_background)
                     .px_3()
-                    .py_2()
+                    .py_1p5()
                     .child(
                         v_flex()
                             .relative()
@@ -6882,42 +6886,75 @@ fn sandbox_network_rows(network: &SandboxNetPolicy) -> Vec<SandboxRow> {
 }
 
 impl ThreadView {
-    fn render_message_rail(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        const PREVIEW_CHARACTERS: usize = 240;
+    fn render_message_rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        const BASE_WIDTH: f32 = 8.;
+        const ACTIVE_WIDTH: f32 = 16.;
+        const HOVER_WIDTH: f32 = 24.;
+        const HOVER_FALLOFF: f32 = 5.;
 
-        let entries = self.thread.read(cx).entries();
-        let user_messages: Vec<(usize, SharedString)> = entries
+        let user_entries: Vec<usize> = self
+            .thread
+            .read(cx)
+            .entries()
             .iter()
             .enumerate()
             .filter_map(|(entry_ix, entry)| match entry {
-                AgentThreadEntry::UserMessage(message) if !message.indented => {
-                    let markdown = message.content.to_markdown(cx);
-                    let preview = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
-                    Some((
-                        entry_ix,
-                        SharedString::from(util::truncate_and_trailoff(&preview, PREVIEW_CHARACTERS)),
-                    ))
-                }
+                AgentThreadEntry::UserMessage(message) if !message.indented => Some(entry_ix),
                 _ => None,
             })
             .collect();
-        if user_messages.len() < 2 {
+        if user_entries.len() < 2 {
             return None;
         }
 
         let scroll_top_ix = self.list_state.logical_scroll_top().item_ix;
-        let active_ix = user_messages
+        let active_entry = user_entries
             .iter()
             .rev()
-            .find(|(entry_ix, _)| *entry_ix <= scroll_top_ix)
-            .or(user_messages.first())
-            .map(|(entry_ix, _)| *entry_ix);
+            .find(|entry_ix| **entry_ix <= scroll_top_ix)
+            .or(user_entries.first())
+            .copied();
+        let hovered_position = self
+            .rail_hovered_entry
+            .and_then(|hovered| user_entries.iter().position(|entry_ix| *entry_ix == hovered));
+
+        let reduce_motion = cx.reduce_motion();
+        let mut animating = false;
+        let mut tick_widths = Vec::with_capacity(user_entries.len());
+        for (position, entry_ix) in user_entries.iter().enumerate() {
+            let mut target = if active_entry == Some(*entry_ix) {
+                ACTIVE_WIDTH
+            } else {
+                BASE_WIDTH
+            };
+            if let Some(hovered) = hovered_position {
+                let distance = position.abs_diff(hovered) as f32;
+                target = target.max(HOVER_WIDTH - distance * HOVER_FALLOFF);
+            }
+            let current = self.rail_tick_widths.entry(*entry_ix).or_insert(target);
+            let difference = target - *current;
+            if reduce_motion || difference.abs() < 0.2 {
+                *current = target;
+            } else {
+                *current += difference * 0.3;
+                animating = true;
+            }
+            tick_widths.push(*current);
+        }
+        self.rail_tick_widths
+            .retain(|entry_ix, _| user_entries.contains(entry_ix));
+        if animating {
+            window.request_animation_frame();
+        }
+
         let colors = cx.theme().colors();
         let active_color = colors.text;
         let idle_color = colors.text_disabled.opacity(0.6);
         let popup_background = colors.elevated_surface_background;
         let popup_border = colors.border;
-        let popup_text = colors.text_muted;
+        let title_color = colors.text;
+        let body_color = colors.text_muted;
+        let thread = self.thread.clone();
 
         Some(
             v_flex()
@@ -6926,43 +6963,61 @@ impl ThreadView {
                 .left_0()
                 .top_0()
                 .bottom_0()
-                .w_6()
+                .w_8()
                 .justify_center()
                 .items_start()
-                .children(user_messages.into_iter().map(|(entry_ix, preview)| {
-                    let is_active = active_ix == Some(entry_ix);
-                    h_flex()
-                        .id(("message-rail-tick", entry_ix))
-                        .w_6()
-                        .h(px(10.))
-                        .items_center()
-                        .pl_1()
-                        .cursor_pointer()
-                        .child(
-                            div()
-                                .h(px(2.))
-                                .w(if is_active { px(14.) } else { px(8.) })
-                                .rounded_full()
-                                .bg(if is_active { active_color } else { idle_color }),
-                        )
-                        .tooltip(move |_window, cx| {
-                            let preview = preview.clone();
-                            cx.new(|_| MessageRailPreview {
-                                text: preview,
-                                background: popup_background,
-                                border: popup_border,
-                                text_color: popup_text,
+                .children(user_entries.into_iter().zip(tick_widths).map(
+                    |(entry_ix, width)| {
+                        let is_active = active_entry == Some(entry_ix);
+                        let is_hovered = self.rail_hovered_entry == Some(entry_ix);
+                        let thread = thread.clone();
+                        h_flex()
+                            .id(("message-rail-tick", entry_ix))
+                            .w_8()
+                            .h(px(10.))
+                            .items_center()
+                            .pl_1()
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .h(px(if is_hovered { 3. } else { 2. }))
+                                    .w(px(width))
+                                    .rounded_full()
+                                    .bg(if is_active || is_hovered {
+                                        active_color
+                                    } else {
+                                        idle_color
+                                    }),
+                            )
+                            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                if *hovered {
+                                    this.rail_hovered_entry = Some(entry_ix);
+                                } else if this.rail_hovered_entry == Some(entry_ix) {
+                                    this.rail_hovered_entry = None;
+                                }
+                                cx.notify();
+                            }))
+                            .tooltip(move |_window, cx| {
+                                let (title, body) = message_rail_preview_text(&thread, entry_ix, cx);
+                                cx.new(|_| MessageRailPreview {
+                                    title,
+                                    body,
+                                    background: popup_background,
+                                    border: popup_border,
+                                    title_color,
+                                    body_color,
+                                })
+                                .into()
                             })
-                            .into()
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.list_state.scroll_to(ListOffset {
-                                item_ix: entry_ix,
-                                offset_in_item: px(0.0),
-                            });
-                            cx.notify();
-                        }))
-                }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.list_state.scroll_to(ListOffset {
+                                    item_ix: entry_ix,
+                                    offset_in_item: px(0.0),
+                                });
+                                cx.notify();
+                            }))
+                    },
+                ))
                 .into_any_element(),
         )
     }
@@ -8762,7 +8817,6 @@ impl ThreadView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let terminal_data = terminal.read(cx);
-        let working_dir = terminal_data.working_dir();
         let started_at = terminal_data.started_at();
 
         let tool_failed = matches!(
@@ -8806,17 +8860,20 @@ impl ThreadView {
         ));
         let border_color = cx.theme().colors().border_variant;
 
-        let working_dir = working_dir
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "current directory".to_string());
-
-        let command_element = self.render_collapsible_command(
-            header_group.clone(),
-            false,
-            tool_call.label.clone(),
-            window,
-            cx,
+        let command_source = tool_call.label.read(cx).source();
+        let command_text = command_source
+            .strip_prefix("```bash\n")
+            .or_else(|| command_source.strip_prefix("```\n"))
+            .and_then(|source| source.strip_suffix("\n```"))
+            .unwrap_or(&command_source)
+            .to_string();
+        let command_summary = SharedString::from(
+            command_text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         );
 
         let is_expanded = self
@@ -8847,8 +8904,8 @@ impl ThreadView {
 
         let header = TerminalToolHeader::new(
             terminal.entity_id().to_string(),
-            header_group,
-            working_dir,
+            header_group.clone(),
+            command_summary,
             is_expanded,
         )
         .elapsed(time_elapsed)
@@ -8885,7 +8942,7 @@ impl ThreadView {
         .when_some(tool_call.sandbox_not_applied.as_ref(), |header, reason| {
             header.sandbox_warning(self.sandbox_not_applied_warning(reason, cx))
         })
-        .command_slot(command_element);
+        ;
 
         let terminal_view = self
             .entry_view_state
@@ -8893,30 +8950,54 @@ impl ThreadView {
             .entry(entry_ix)
             .and_then(|entry| entry.terminal(terminal));
 
+        let is_card = is_expanded || needs_confirmation;
+        let failed = tool_failed || command_failed;
+        let exit_code = output.and_then(|output| output.exit_status.exit_code);
+        let copy_button = CopyButton::new(
+            SharedString::from(format!("{header_group}-copy-command")),
+            command_text.clone(),
+        )
+        .tooltip_label("Copy Command")
+        .visible_on_hover(header_group.clone());
+
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
                 this.my_1p5()
                     .mx_5()
-                    .border_1()
-                    .when(tool_failed || command_failed, |card| card.border_dashed())
-                    .border_color(border_color)
-                    .bg(cx.theme().colors().element_background)
-                    .rounded_xl()
+                    .when(is_card, |card| {
+                        card.border_1()
+                            .when(failed, |card| card.border_dashed())
+                            .border_color(border_color)
+                            .bg(cx.theme().colors().terminal_background)
+                            .rounded_xl()
+                    })
             })
             .overflow_hidden()
             .child(header)
-            .when(is_expanded && terminal_view.is_some(), |this| {
+            .when(is_expanded, |this| {
                 this.child(
-                    div()
-                        .pt_2()
-                        .border_t_1()
-                        .when(tool_failed || command_failed, |card| card.border_dashed())
-                        .border_color(border_color)
-                        .bg(cx.theme().colors().terminal_background)
-                        .rounded_b_md()
-                        .text_ui_sm(cx)
-                        .h_full()
-                        .children(terminal_view.map(|terminal_view| {
+                    v_flex()
+                        .group(header_group.clone())
+                        .relative()
+                        .px_3()
+                        .pb_2()
+                        .gap_1p5()
+                        .child(
+                            Label::new("Shell")
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            div()
+                                .pr_6()
+                                .font_buffer(cx)
+                                .text_size(rems_from_px(12_f32))
+                                .line_height(rems_from_px(18_f32))
+                                .text_color(cx.theme().colors().text)
+                                .child(format!("$ {command_text}")),
+                        )
+                        .child(div().absolute().top_0().right_2().child(copy_button))
+                        .when_some(terminal_view, |this, terminal_view| {
                             let element = if terminal_view
                                 .read(cx)
                                 .content_mode(window, cx)
@@ -8927,14 +9008,40 @@ impl ThreadView {
                                 terminal_view.into_any_element()
                             };
 
-                            div()
-                                .on_action(cx.listener(|_this, _: &NewTerminal, window, cx| {
-                                    window.dispatch_action(NewThread.boxed_clone(), cx);
-                                    cx.stop_propagation();
-                                }))
-                                .child(element)
-                                .into_any_element()
-                        })),
+                            this.child(
+                                div()
+                                    .on_action(cx.listener(|_this, _: &NewTerminal, window, cx| {
+                                        window.dispatch_action(NewThread.boxed_clone(), cx);
+                                        cx.stop_propagation();
+                                    }))
+                                    .child(element),
+                            )
+                        })
+                        .when(command_finished, |this| {
+                            this.child(
+                                h_flex()
+                                    .justify_end()
+                                    .gap_1()
+                                    .child(
+                                        Icon::new(if failed {
+                                            IconName::Close
+                                        } else {
+                                            IconName::Check
+                                        })
+                                        .size(IconSize::XSmall)
+                                        .color(if failed { Color::Error } else { Color::Muted }),
+                                    )
+                                    .child(
+                                        Label::new(match (failed, exit_code) {
+                                            (false, _) => "Success".to_string(),
+                                            (true, Some(code)) => format!("Failed (exit {code})"),
+                                            (true, None) => "Failed".to_string(),
+                                        })
+                                        .size(LabelSize::Small)
+                                        .color(if failed { Color::Error } else { Color::Muted }),
+                                    ),
+                            )
+                        }),
                 )
             })
             .when_some(permission_request, |this, request| {
@@ -13351,31 +13458,89 @@ impl ThreadView {
     }
 }
 
+fn message_rail_preview_text(
+    thread: &Entity<AcpThread>,
+    entry_ix: usize,
+    cx: &App,
+) -> (SharedString, Option<SharedString>) {
+    const TITLE_CHARACTERS: usize = 120;
+    const BODY_CHARACTERS: usize = 200;
+
+    let squash = |text: String, limit: usize| -> SharedString {
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        SharedString::from(util::truncate_and_trailoff(&text, limit))
+    };
+
+    let entries = thread.read(cx).entries();
+    let title = match entries.get(entry_ix) {
+        Some(AgentThreadEntry::UserMessage(message)) => {
+            squash(message.content.to_markdown(cx), TITLE_CHARACTERS)
+        }
+        _ => SharedString::default(),
+    };
+    let body = entries
+        .iter()
+        .skip(entry_ix + 1)
+        .take_while(|entry| !matches!(entry, AgentThreadEntry::UserMessage(_)))
+        .find_map(|entry| match entry {
+            AgentThreadEntry::AssistantMessage(message) => {
+                message.chunks.iter().find_map(|chunk| match chunk {
+                    AssistantMessageChunk::Message { block, .. } => {
+                        let markdown = block.to_markdown(cx);
+                        (!markdown.trim().is_empty()).then(|| squash(markdown, BODY_CHARACTERS))
+                    }
+                    AssistantMessageChunk::Thought { .. } => None,
+                })
+            }
+            _ => None,
+        });
+    (title, body)
+}
+
 struct MessageRailPreview {
-    text: SharedString,
+    title: SharedString,
+    body: Option<SharedString>,
     background: Hsla,
     border: Hsla,
-    text_color: Hsla,
+    title_color: Hsla,
+    body_color: Hsla,
 }
 
 impl Render for MessageRailPreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().pl_2().child(
-            div()
-                .max_w(rems_from_px(360_f32))
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .border_1()
-                .border_color(self.border)
-                .bg(self.background)
-                .shadow_md()
-                .text_sm()
-                .line_height(rems_from_px(20_f32))
-                .text_color(self.text_color)
-                .font_ui(cx)
-                .child(self.text.clone()),
-        )
+        div()
+            .pl_2()
+            .child(
+                v_flex()
+                    .w(rems_from_px(360_f32))
+                    .gap_1()
+                    .px_3()
+                    .py_2p5()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(self.border)
+                    .bg(self.background)
+                    .shadow_md()
+                    .text_sm()
+                    .font_ui(cx)
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(self.title_color)
+                            .child(self.title.clone()),
+                    )
+                    .children(self.body.clone().map(|body| {
+                        div()
+                            .line_height(rems_from_px(20_f32))
+                            .text_color(self.body_color)
+                            .child(body)
+                    })),
+            )
+            .with_animation(
+                "message-rail-preview-in",
+                Animation::new(Duration::from_millis(140)).with_easing(gpui::ease_out_quint()),
+                |element, delta| element.opacity(delta),
+            )
     }
 }
 
@@ -13390,7 +13555,7 @@ impl Render for ThreadView {
         let list_state = self.list_state.clone();
 
         let message_rail = if has_messages {
-            self.render_message_rail(cx)
+            self.render_message_rail(window, cx)
         } else {
             None
         };

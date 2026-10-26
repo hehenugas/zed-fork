@@ -18,7 +18,7 @@ pub struct TerminalSandboxWarning {
 pub struct TerminalToolHeader {
     id: SharedString,
     hover_group: SharedString,
-    working_dir: SharedString,
+    summary: SharedString,
     is_expanded: bool,
     elapsed: Option<Duration>,
     running: bool,
@@ -35,13 +35,13 @@ impl TerminalToolHeader {
     pub fn new(
         id: impl Into<SharedString>,
         hover_group: impl Into<SharedString>,
-        working_dir: impl Into<SharedString>,
+        summary: impl Into<SharedString>,
         is_expanded: bool,
     ) -> Self {
         Self {
             id: id.into(),
             hover_group: hover_group.into(),
-            working_dir: working_dir.into(),
+            summary: summary.into(),
             is_expanded,
             elapsed: None,
             running: false,
@@ -112,7 +112,7 @@ impl RenderOnce for TerminalToolHeader {
         let Self {
             id,
             hover_group,
-            working_dir,
+            summary,
             is_expanded,
             elapsed,
             running,
@@ -127,8 +127,7 @@ impl RenderOnce for TerminalToolHeader {
 
         let child_id = |name: &str| format!("terminal-tool-{name}-{id}");
 
-        let header_bg = cx.theme().colors().element_background;
-        let status_label = if running { "Running command" } else { "Ran command" };
+        let status_label = if running { "Running" } else { "Ran" };
 
         let header_row = h_flex()
             .id(child_id("header"))
@@ -138,6 +137,8 @@ impl RenderOnce for TerminalToolHeader {
             .flex_none()
             .gap_2()
             .rounded_t_lg()
+            .cursor_pointer()
+            .when_some(on_toggle_expand, |this, handler| this.on_click(handler))
             .child(
                 Icon::new(IconName::Terminal)
                     .size(IconSize::Small)
@@ -146,22 +147,22 @@ impl RenderOnce for TerminalToolHeader {
             .child(
                 Label::new(status_label)
                     .size(LabelSize::Small)
+                    .color(Color::Muted)
                     .flex_none(),
             )
             .child(
                 div().w_full().min_w_0().overflow_hidden().child(
-                    Label::new(working_dir)
-                        .buffer_font(cx)
-                        .size(LabelSize::XSmall)
+                    Label::new(summary)
+                        .size(LabelSize::Small)
                         .color(Color::Muted)
-                        .truncate_start(),
+                        .single_line()
+                        .truncate(),
                 ),
             )
             .child(
                 Disclosure::new(child_id("disclosure"), is_expanded)
                     .opened_icon(IconName::ChevronUp)
-                    .closed_icon(IconName::ChevronDown)
-                    .when_some(on_toggle_expand, |this, handler| this.on_click(handler)),
+                    .closed_icon(IconName::ChevronDown),
             )
             .when(show_elapsed, |header| {
                 let elapsed = elapsed.unwrap_or_default();
@@ -251,7 +252,6 @@ impl RenderOnce for TerminalToolHeader {
         v_flex()
             .group(hover_group)
             .text_xs()
-            .bg(header_bg)
             .child(header_row)
             .children(command_slot)
     }
