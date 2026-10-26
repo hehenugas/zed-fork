@@ -498,18 +498,19 @@ fn start_worktree_creations(
     } = branch_target
     {
         for repo in git_repos {
-            let selected_path = repo.update(cx, |repo, _cx| {
-                if repo.work_directory_abs_path.as_ref() == repository_path.as_path() {
-                    Ok(Some(repo.path_for_new_linked_worktree(
-                        &worktree_name,
-                        worktree_directory_setting,
-                    )?))
-                } else {
-                    Ok(None)
-                }
-            })?;
+            let selected_path =
+                repo.update(cx, |repo, _cx| {
+                    if repo.work_directory_abs_path.as_ref() == repository_path.as_path() {
+                        Some(repo.path_for_new_linked_worktree(
+                            &worktree_name,
+                            worktree_directory_setting,
+                        ))
+                    } else {
+                        None
+                    }
+                })?;
             if let Some(selected_path) = selected_path {
-                selected_commit_paths.insert(selected_path);
+                selected_commit_paths.insert(selected_path?);
             }
         }
     }
