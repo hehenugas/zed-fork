@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, rc::Rc, sync::Arc};
+use std::{cell::Cell, cmp::Reverse, rc::Rc, sync::Arc};
 
 use acp_thread::AgentSessionConfigOptions;
 use agent_client_protocol::schema::v2 as acp;
@@ -8,15 +8,16 @@ use collections::HashSet;
 use fs::Fs;
 use fuzzy::StringMatchCandidate;
 use gpui::{
-    App, BackgroundExecutor, Context, DismissEvent, Entity, Subscription, Task, Window, prelude::*,
+    App, BackgroundExecutor, Context, DismissEvent, Entity, Pixels, Subscription, Task, Window,
+    canvas, prelude::*,
 };
 use ordered_float::OrderedFloat;
 use picker::popover_menu::PickerPopoverMenu;
 use picker::{Picker, PickerDelegate};
 use settings::{AgentConfigOptionValue, SettingsStore};
 use ui::{
-    ElevationIndex, IconButton, KeyBinding, ListItem, ListItemSpacing, PopoverMenuHandle, Switch,
-    SwitchLabelPosition, ToggleState, Tooltip, prelude::*,
+    ContextMenu, ElevationIndex, IconButton, IconPosition, KeyBinding, ListItem, ListItemSpacing,
+    PopoverMenu, PopoverMenuHandle, Switch, SwitchLabelPosition, ToggleState, Tooltip, prelude::*,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use util::ResultExt as _;
@@ -36,7 +37,204 @@ pub struct ConfigOptionsView {
     agent_server: Rc<dyn AgentServer>,
     fs: Arc<dyn Fs>,
     config_option_ids: Vec<acp::SessionConfigId>,
+    available_width: Rc<Cell<Pixels>>,
     _refresh_task: Task<()>,
+}
+
+/// Width reserved for the `···` button that holds options which don't fit.
+const OVERFLOW_BUTTON_WIDTH: f32 = 32.;
+const SELECTOR_CHROME_WIDTH: f32 = 34.;
+const SWITCH_CHROME_WIDTH: f32 = 60.;
+const APPROXIMATE_CHARACTER_WIDTH: f32 = 7.;
+
+/// Lower numbers stay visible longest when the toolbar runs out of room.
+fn overflow_priority(category: Option<&acp::SessionConfigOptionCategory>) -> u8 {
+    match category {
+        Some(acp::SessionConfigOptionCategory::Model) => 0,
+        Some(acp::SessionConfigOptionCategory::Mode) => 1,
+        Some(acp::SessionConfigOptionCategory::ModelConfig)
+        | Some(acp::SessionConfigOptionCategory::ThoughtLevel) => 2,
+        _ => 3,
+    }
+}
+
+enum OverflowEntry {
+    Toggle {
+        config_id: acp::SessionConfigId,
+        name: SharedString,
+        enabled: bool,
+    },
+    Choice {
+        config_id: acp::SessionConfigId,
+        name: SharedString,
+        current_name: SharedString,
+        current_value: Option<acp::SessionConfigValueId>,
+        options: Vec<(acp::SessionConfigValueId, SharedString)>,
+    },
+}
+
+impl ConfigOptionsView {
+    fn overflow_entries(&self, hidden: &[usize], cx: &App) -> Vec<OverflowEntry> {
+        hidden
+            .iter()
+            .filter_map(|&index| {
+                let selector = self.selectors.get(index)?.read(cx);
+                let option = selector.current_option()?;
+                match &option.kind {
+                    acp::SessionConfigKind::Select(select) => {
+                        let options = extract_options(&self.config_options, &option.config_id)
+                            .into_iter()
+                            .map(|value| (value.value, SharedString::from(value.name)))
+                            .collect();
+                        Some(OverflowEntry::Choice {
+                            config_id: option.config_id.clone(),
+                            name: option.name.clone().into(),
+                            current_name: selector.current_value_name().into(),
+                            current_value: Some(select.current_value.clone()),
+                            options,
+                        })
+                    }
+                    acp::SessionConfigKind::Boolean(boolean) => Some(OverflowEntry::Toggle {
+                        config_id: option.config_id.clone(),
+                        name: option.name.clone().into(),
+                        enabled: boolean.current_value,
+                    }),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn render_overflow_menu(&self, hidden: &[usize], cx: &App) -> impl IntoElement + use<> {
+        let entries = Rc::new(self.overflow_entries(hidden, cx));
+        let config_options = self.config_options.clone();
+        let agent_server = self.agent_server.clone();
+        let fs = self.fs.clone();
+
+        PopoverMenu::new("config-options-overflow")
+            .trigger_with_tooltip(
+                IconButton::new("config-options-overflow-trigger", IconName::Ellipsis)
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted),
+                Tooltip::text("More Options"),
+            )
+            .anchor(gpui::Anchor::BottomRight)
+            .menu(move |window, cx| {
+                let entries = entries.clone();
+                let config_options = config_options.clone();
+                let agent_server = agent_server.clone();
+                let fs = fs.clone();
+                Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
+                    for entry in entries.iter() {
+                        match entry {
+                            OverflowEntry::Toggle {
+                                config_id,
+                                name,
+                                enabled,
+                            } => {
+                                let config_id = config_id.clone();
+                                let enabled = *enabled;
+                                let config_options = config_options.clone();
+                                let agent_server = agent_server.clone();
+                                let fs = fs.clone();
+                                menu = menu.toggleable_entry(
+                                    name.clone(),
+                                    enabled,
+                                    IconPosition::Start,
+                                    None,
+                                    move |_, cx| {
+                                        apply_config_value(
+                                            &config_options,
+                                            &agent_server,
+                                            &fs,
+                                            &config_id,
+                                            AgentConfigOptionValue::Boolean(!enabled),
+                                            acp::SessionConfigOptionValue::boolean(!enabled),
+                                            cx,
+                                        );
+                                    },
+                                );
+                            }
+                            OverflowEntry::Choice {
+                                config_id,
+                                name,
+                                current_name,
+                                current_value,
+                                options,
+                            } => {
+                                let config_id = config_id.clone();
+                                let current_value = current_value.clone();
+                                let options = options.clone();
+                                let config_options = config_options.clone();
+                                let agent_server = agent_server.clone();
+                                let fs = fs.clone();
+                                menu = menu.submenu(
+                                    format!("{name}: {current_name}"),
+                                    move |mut submenu, _, _| {
+                                        for (value, label) in options.iter() {
+                                            let config_id = config_id.clone();
+                                            let value = value.clone();
+                                            let is_current =
+                                                current_value.as_ref() == Some(&value);
+                                            let config_options = config_options.clone();
+                                            let agent_server = agent_server.clone();
+                                            let fs = fs.clone();
+                                            submenu = submenu.toggleable_entry(
+                                                label.clone(),
+                                                is_current,
+                                                IconPosition::Start,
+                                                None,
+                                                move |_, cx| {
+                                                    apply_config_value(
+                                                        &config_options,
+                                                        &agent_server,
+                                                        &fs,
+                                                        &config_id,
+                                                        AgentConfigOptionValue::ValueId(
+                                                            value.0.to_string(),
+                                                        ),
+                                                        acp::SessionConfigOptionValue::id(
+                                                            value.clone(),
+                                                        ),
+                                                        cx,
+                                                    );
+                                                },
+                                            );
+                                        }
+                                        submenu
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    menu
+                }))
+            })
+    }
+}
+
+fn apply_config_value(
+    config_options: &Rc<dyn AgentSessionConfigOptions>,
+    agent_server: &Rc<dyn AgentServer>,
+    fs: &Arc<dyn Fs>,
+    config_id: &acp::SessionConfigId,
+    default_value: AgentConfigOptionValue,
+    value: acp::SessionConfigOptionValue,
+    cx: &mut App,
+) {
+    agent_server.set_default_config_option(
+        config_id.0.as_ref(),
+        Some(default_value),
+        fs.clone(),
+        cx,
+    );
+    let task = config_options.set_config_option(config_id.clone(), value, cx);
+    cx.spawn(async move |_| {
+        if let Err(err) = task.await {
+            log::error!("Failed to set config option: {:?}", err);
+        }
+    })
+    .detach();
 }
 
 impl ConfigOptionsView {
@@ -69,6 +267,7 @@ impl ConfigOptionsView {
             agent_server,
             fs,
             config_option_ids,
+            available_width: Rc::new(Cell::new(Pixels::ZERO)),
             _refresh_task: refresh_task,
         }
     }
@@ -279,16 +478,79 @@ impl ConfigOptionsView {
 }
 
 impl Render for ConfigOptionsView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.selectors.is_empty() {
             return div().into_any_element();
         }
 
+        let available = f32::from(self.available_width.get());
+        let widths: Vec<f32> = self
+            .selectors
+            .iter()
+            .map(|selector| selector.read(cx).estimated_width())
+            .collect();
+
+        let mut hidden: Vec<usize> = Vec::new();
+        // A width of zero means the row hasn't been measured yet, so show everything.
+        let total: f32 = widths.iter().sum::<f32>() + widths.len() as f32 * 4.;
+        if available > 0. && total > available {
+            let mut by_priority: Vec<usize> = (0..self.selectors.len()).collect();
+            let priorities: Vec<u8> = self
+                .selectors
+                .iter()
+                .map(|selector| {
+                    selector
+                        .read(cx)
+                        .current_option()
+                        .map_or(u8::MAX, |option| overflow_priority(option.category.as_ref()))
+                })
+                .collect();
+            by_priority.sort_by_key(|&index| (priorities[index], index));
+
+            let mut remaining = available - OVERFLOW_BUTTON_WIDTH;
+            for index in by_priority {
+                let needed = widths[index] + 4.;
+                if needed <= remaining {
+                    remaining -= needed;
+                } else {
+                    remaining = 0.;
+                    hidden.push(index);
+                }
+            }
+        }
+
+        let measured_width = self.available_width.clone();
+        let overflow_menu = (!hidden.is_empty()).then(|| self.render_overflow_menu(&hidden, cx));
+        let visible = self
+            .selectors
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !hidden.contains(index))
+            .map(|(_, selector)| selector.clone());
+
         h_flex()
+            .relative()
+            .flex_1()
             .min_w_0()
-            .flex_wrap()
+            .justify_end()
             .gap_1()
-            .children(self.selectors.iter().cloned())
+            .overflow_hidden()
+            .child(
+                canvas(
+                    move |bounds, window, _| {
+                        let width = bounds.size.width;
+                        if (f32::from(measured_width.get()) - f32::from(width)).abs() > 0.5 {
+                            measured_width.set(width);
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .children(visible)
+            .children(overflow_menu)
             .into_any_element()
     }
 }
@@ -374,6 +636,22 @@ impl ConfigOptionSelector {
 
     fn config_id(&self) -> &acp::SessionConfigId {
         &self.config_id
+    }
+
+    fn estimated_width(&self) -> f32 {
+        match self.current_option().map(|option| option.kind) {
+            Some(acp::SessionConfigKind::Boolean(_)) => {
+                let name_length = self
+                    .current_option()
+                    .map_or(0, |option| option.name.chars().count());
+                name_length as f32 * APPROXIMATE_CHARACTER_WIDTH + SWITCH_CHROME_WIDTH
+            }
+            _ => {
+                self.current_value_name().chars().count().min(32) as f32
+                    * APPROXIMATE_CHARACTER_WIDTH
+                    + SELECTOR_CHROME_WIDTH
+            }
+        }
     }
 
     fn toggle_picker(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
