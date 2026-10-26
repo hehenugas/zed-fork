@@ -81,18 +81,11 @@ jobs:
           #!/usr/bin/env bash
           HERE="$(dirname "$(readlink -f "$0")")"
           export ZED_UPDATE_EXPLANATION="Updates are disabled in the fork AppImage."
-          # Share Zed's default data/config paths unless the user requests isolation.
-          if [[ -n "${ZED_FORK_USER_DATA_DIR:-}" ]]; then
-            exec "$HERE/libexec/zed-editor" --user-data-dir "$ZED_FORK_USER_DATA_DIR" "$@"
+          # Keep Beta's settings, databases, extensions, and logs separate from installed Zed.
+          if [[ -z "${ZED_FORK_USER_DATA_DIR:-}" ]]; then
+            ZED_FORK_USER_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zed-fork-beta"
           fi
-          ZED_FLATPAK_HOME="$HOME/.var/app/dev.zed.Zed"
-          if [[ -d "$ZED_FLATPAK_HOME/config/zed" ]]; then
-            export FLATPAK_XDG_CONFIG_HOME="$ZED_FLATPAK_HOME/config"
-            export FLATPAK_XDG_DATA_HOME="$ZED_FLATPAK_HOME/data"
-            export FLATPAK_XDG_CACHE_HOME="$ZED_FLATPAK_HOME/cache"
-            export FLATPAK_XDG_STATE_HOME="$ZED_FLATPAK_HOME/.local/state"
-          fi
-          exec "$HERE/libexec/zed-editor" "$@"
+          exec "$HERE/libexec/zed-editor" --user-data-dir "$ZED_FORK_USER_DATA_DIR" "$@"
           RUN
           chmod +x AppDir/AppRun
           version="$(script/get-crate-version zed)"
