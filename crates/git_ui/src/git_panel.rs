@@ -1276,6 +1276,28 @@ pub(crate) fn commit_message_editor(
 }
 
 impl GitPanel {
+    fn open_git_graph(
+        &self,
+        repository_id: RepositoryId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let git_store = self.project.read(cx).git_store().clone();
+        self.workspace
+            .update(cx, |workspace, cx| {
+                crate::git_graph::open_or_reuse_graph(
+                    workspace,
+                    repository_id,
+                    git_store,
+                    LogSource::All,
+                    None,
+                    window,
+                    cx,
+                );
+            })
+            .log_err();
+    }
+
     // Only the test-support constructors call this thin wrapper now; production
     // registration goes through `new_with_serialized_panel` directly. Gate it to
     // the same cfg as `new_test` so the non-test lib build doesn't see it as dead.
@@ -6850,7 +6872,7 @@ impl GitPanel {
             return None;
         }
 
-        self.active_repository.as_ref()?;
+        let repository_id = self.active_repository.as_ref()?.read(cx).id;
 
         let diff_stat_total = self.diff_stat_total;
 
@@ -6906,6 +6928,21 @@ impl GitPanel {
                     h_flex()
                         .gap_1()
                         .child(self.render_view_options_menu("view_options_menu"))
+                        .child(
+                            IconButton::new("open-git-graph", IconName::GitGraph)
+                                .icon_size(IconSize::Small)
+                                .tooltip(Tooltip::text("Open Git Graph"))
+                                .on_click({
+                                    let git_panel = cx.weak_entity();
+                                    move |_, window, cx| {
+                                        git_panel
+                                            .update(cx, |panel, cx| {
+                                                panel.open_git_graph(repository_id, window, cx);
+                                            })
+                                            .log_err();
+                                    }
+                                }),
+                        )
                         .child(self.render_git_changes_actions_button(cx)),
                 ),
         )
@@ -9506,6 +9543,11 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let active_repository_id = self
+            .active_repository
+            .as_ref()
+            .map(|repository| repository.read(cx).id);
+        let git_panel = cx.weak_entity();
         let scroll_handle = self.repository_sections_scroll_handle.clone();
         let all_collapsed = !self.repository_sections.is_empty()
             && self
@@ -9555,6 +9597,26 @@ impl GitPanel {
                                             }
                                         }
                                     }),
+                            )
+                            .child(
+                                IconButton::new(
+                                    "open-active-repository-git-graph",
+                                    IconName::GitGraph,
+                                )
+                                .icon_size(IconSize::Small)
+                                .tooltip(Tooltip::text("Open Git Graph for Active Repository"))
+                                .on_click({
+                                    let git_panel = git_panel.clone();
+                                    move |_, window, cx| {
+                                        if let Some(repository_id) = active_repository_id {
+                                            git_panel
+                                                .update(cx, |panel, cx| {
+                                                    panel.open_git_graph(repository_id, window, cx);
+                                                })
+                                                .log_err();
+                                        }
+                                    }
+                                }),
                             )
                             .child(
                         IconButton::new(
