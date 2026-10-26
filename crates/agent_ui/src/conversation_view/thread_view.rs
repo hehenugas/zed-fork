@@ -9061,6 +9061,7 @@ impl ThreadView {
 
                             this.child(
                                 div()
+                                    .text_size(rems_from_px(12_f32))
                                     .on_action(cx.listener(|_this, _: &NewTerminal, window, cx| {
                                         window.dispatch_action(NewThread.boxed_clone(), cx);
                                         cx.stop_propagation();
@@ -13611,6 +13612,24 @@ impl Render for ThreadView {
             None
         };
 
+        let scroll_to_latest = (has_messages && !list_state.is_following_tail()).then(|| {
+            div()
+                .absolute()
+                .bottom_3()
+                .right_6()
+                .child(
+                    IconButton::new("scroll-to-latest", IconName::ArrowDown)
+                        .shape(ui::IconButtonShape::Square)
+                        .icon_size(IconSize::Small)
+                        .style(ButtonStyle::Outlined)
+                        .tooltip(Tooltip::text("Scroll to Latest"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.list_state.set_follow_mode(gpui::FollowMode::Tail);
+                            cx.notify();
+                        })),
+                )
+        });
+
         let conversation = v_flex()
             .relative()
             .when(self.resumed_without_history, |this| {
@@ -13622,6 +13641,7 @@ impl Render for ThreadView {
                         .size_full()
                         .child(self.render_entries(cx))
                         .children(message_rail)
+                        .children(scroll_to_latest)
                         .vertical_scrollbar_for(&list_state, window, cx)
                         .into_any()
                 } else {
