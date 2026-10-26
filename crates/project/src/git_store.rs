@@ -1073,6 +1073,11 @@ impl GitStore {
         client.add_entity_request_handler(Self::handle_diff_checkpoints);
         client.add_entity_request_handler(Self::handle_load_commit_diff);
         client.add_entity_request_handler(Self::handle_checkout_files);
+        client.add_entity_request_handler(Self::handle_checkout_commit);
+        client.add_entity_request_handler(Self::handle_revert_commit);
+        client.add_entity_request_handler(Self::handle_rebase_onto);
+        client.add_entity_request_handler(Self::handle_format_patch);
+        client.add_entity_request_handler(Self::handle_load_commit_diff_between);
         client.add_entity_request_handler(Self::handle_add_path_to_gitignore);
         client.add_entity_request_handler(Self::handle_add_path_to_git_info_exclude);
         client.add_entity_request_handler(Self::handle_open_commit_message_buffer);
@@ -4610,6 +4615,102 @@ impl GitStore {
         })
     }
 
+    async fn handle_load_commit_diff_between(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::LoadCommitDiffBetween>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::LoadCommitDiffResponse> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        let commit_diff = repository_handle
+            .update(&mut cx, |repository, cx| {
+                repository.load_commit_diff_between(
+                    envelope.payload.base,
+                    envelope.payload.head,
+                    cx,
+                )
+            })
+            .await??;
+
+        Ok(proto::LoadCommitDiffResponse {
+            files: commit_diff
+                .files
+                .into_iter()
+                .map(|file| proto::CommitFile {
+                    path: file.path.as_unix_str().to_owned(),
+                    old_text: file.old_text,
+                    new_text: file.new_text,
+                    is_binary: file.is_binary,
+                })
+                .collect(),
+            is_shallow_boundary: commit_diff.is_shallow_boundary,
+        })
+    }
+
+    async fn handle_checkout_commit(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitCheckoutCommit>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        repository
+            .update(&mut cx, |repository, cx| {
+                repository.checkout_commit(envelope.payload.commit, cx)
+            })
+            .await??;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_revert_commit(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitRevertCommit>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        repository
+            .update(&mut cx, |repository, cx| {
+                repository.revert_commit(
+                    envelope.payload.commit,
+                    envelope.payload.mainline_parent,
+                    cx,
+                )
+            })
+            .await??;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_rebase_onto(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitRebaseOnto>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        repository
+            .update(&mut cx, |repository, cx| {
+                repository.rebase_onto(envelope.payload.commit, cx)
+            })
+            .await??;
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_format_patch(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitFormatPatch>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::GitFormatPatchResponse> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        let patch = repository
+            .update(&mut cx, |repository, _| {
+                repository.format_patch(envelope.payload.commit)
+            })
+            .await??;
+        Ok(proto::GitFormatPatchResponse { patch })
+    }
+
     async fn handle_reset(
         this: Entity<Self>,
         envelope: TypedEnvelope<proto::GitReset>,
@@ -4801,7 +4902,11 @@ impl GitStore {
         mut cx: AsyncApp,
     ) -> Result<proto::GetTreeDiffResponse> {
         let repository_id = RepositoryId(request.payload.repository_id);
-        let diff_type = if request.payload.includes_worktree {
+        let diff_type = if request.payload.direct_worktree {
+            DiffTreeType::SinceWithWorktree {
+                base: request.payload.base.into(),
+            }
+        } else if request.payload.includes_worktree {
             DiffTreeType::MergeBaseWithWorktree {
                 base: request.payload.base.into(),
             }
@@ -7185,6 +7290,148 @@ impl Repository {
         )
     }
 
+    fn schedule_scan_after_git_operation(&mut self, cx: &mut Context<Self>) {
+        let scan_updates_tx =
+            self.git_store()
+                .and_then(|git_store| match &git_store.read(cx).state {
+                    GitStoreState::Local { downstream, .. } => Some(
+                        downstream
+                            .as_ref()
+                            .map(|downstream| downstream.updates_tx.clone()),
+                    ),
+                    _ => None,
+                });
+        if let Some(updates_tx) = scan_updates_tx {
+            self.schedule_scan(updates_tx, cx);
+        }
+    }
+
+    pub fn checkout_commit(
+        &mut self,
+        commit: String,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<Result<()>> {
+        let id = self.id;
+        let scan = self.send_job(
+            "checkout_commit",
+            Some(format!("git switch --detach {commit}").into()),
+            move |repo, _| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.checkout_commit(commit, environment).await,
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        client
+                            .request(proto::GitCheckoutCommit {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                commit,
+                            })
+                            .await?;
+                        Ok(())
+                    }
+                }
+            },
+        );
+        self.schedule_scan_after_git_operation(cx);
+        scan
+    }
+
+    pub fn revert_commit(
+        &mut self,
+        commit: String,
+        mainline_parent: Option<u32>,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<Result<()>> {
+        let id = self.id;
+        let scan = self.send_job(
+            "revert_commit",
+            Some(format!("git revert {commit}").into()),
+            move |repo, _| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => {
+                        backend
+                            .revert_commit(commit, mainline_parent, environment)
+                            .await
+                    }
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        client
+                            .request(proto::GitRevertCommit {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                commit,
+                                mainline_parent,
+                            })
+                            .await?;
+                        Ok(())
+                    }
+                }
+            },
+        );
+        self.schedule_scan_after_git_operation(cx);
+        scan
+    }
+
+    pub fn rebase_onto(
+        &mut self,
+        commit: String,
+        cx: &mut Context<Self>,
+    ) -> oneshot::Receiver<Result<()>> {
+        let id = self.id;
+        let scan = self.send_job(
+            "rebase_onto",
+            Some(format!("git rebase {commit}").into()),
+            move |repo, _| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.rebase_onto(commit, environment).await,
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        client
+                            .request(proto::GitRebaseOnto {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                commit,
+                            })
+                            .await?;
+                        Ok(())
+                    }
+                }
+            },
+        );
+        self.schedule_scan_after_git_operation(cx);
+        scan
+    }
+
+    pub fn format_patch(&mut self, commit: String) -> oneshot::Receiver<Result<Vec<u8>>> {
+        let id = self.id;
+        self.send_job("format_patch", None, move |repo, _| async move {
+            match repo {
+                RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
+                    backend.format_patch(commit).await
+                }
+                RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                    let response = client
+                        .request(proto::GitFormatPatch {
+                            project_id: project_id.0,
+                            repository_id: id.to_proto(),
+                            commit,
+                        })
+                        .await?;
+                    Ok(response.patch)
+                }
+            }
+        })
+    }
+
     pub fn reset(
         &mut self,
         commit: String,
@@ -7218,19 +7465,7 @@ impl Repository {
             }
         });
 
-        let scan_updates_tx =
-            self.git_store()
-                .and_then(|git_store| match &git_store.read(cx).state {
-                    GitStoreState::Local { downstream, .. } => Some(
-                        downstream
-                            .as_ref()
-                            .map(|downstream| downstream.updates_tx.clone()),
-                    ),
-                    _ => None,
-                });
-        if let Some(updates_tx) = scan_updates_tx {
-            self.schedule_scan(updates_tx, cx);
-        }
+        self.schedule_scan_after_git_operation(cx);
 
         receiver
     }
@@ -7307,6 +7542,53 @@ impl Repository {
                             repository_id: id.to_proto(),
                             commit,
                             ignore_shallow_boundary,
+                        })
+                        .await?;
+                    Ok(CommitDiff {
+                        files: response
+                            .files
+                            .into_iter()
+                            .map(|file| {
+                                Ok(CommitFile {
+                                    path: RepoPath::from_proto(&file.path)?,
+                                    old_text: file.old_text,
+                                    new_text: file.new_text,
+                                    is_binary: file.is_binary,
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                        is_shallow_boundary: response.is_shallow_boundary,
+                    })
+                }
+            }
+        })
+    }
+
+    pub fn load_commit_diff_between(
+        &self,
+        base: String,
+        head: String,
+        cx: &App,
+    ) -> Task<Result<CommitDiff>> {
+        let id = self.id;
+        let repository_state = self.repository_state.clone();
+        let object_read_limiter = self.object_read_limiter.clone();
+        cx.spawn(async move |cx| {
+            let _permit = object_read_limiter.acquire_arc().await;
+            match repository_state.await.map_err(|err| anyhow::anyhow!(err))? {
+                RepositoryState::Local(LocalRepositoryState { backend, .. }) => backend
+                    .load_commit_diff_between(base, head, cx.clone())
+                    .await
+                    .map(decode_commit_diff),
+                RepositoryState::Remote(RemoteRepositoryState {
+                    client, project_id, ..
+                }) => {
+                    let response = client
+                        .request(proto::LoadCommitDiffBetween {
+                            project_id: project_id.0,
+                            repository_id: id.to_proto(),
+                            base,
+                            head,
                         })
                         .await?;
                     Ok(CommitDiff {
@@ -9722,14 +10004,20 @@ impl Repository {
                     backend.diff_tree(diff_type).await
                 }
                 RepositoryState::Remote(RemoteRepositoryState { client, project_id }) => {
-                    let (is_merge, includes_worktree, base, head) = match diff_type {
-                        DiffTreeType::MergeBase { base, head } => (true, false, base, head),
-                        // Older servers ignore `includes_worktree` and use the existing fields,
-                        // so HEAD keeps this request valid as a committed-only fallback.
+                    let (is_merge, includes_worktree, direct_worktree, base, head) = match diff_type
+                    {
+                        DiffTreeType::MergeBase { base, head } => (true, false, false, base, head),
                         DiffTreeType::MergeBaseWithWorktree { base } => {
-                            (true, true, base, "HEAD".into())
+                            // Older servers can ignore `includes_worktree`; HEAD is a
+                            // committed-only fallback for them.
+                            (true, true, false, base, "HEAD".into())
                         }
-                        DiffTreeType::Since { base, head } => (false, false, base, head),
+                        DiffTreeType::SinceWithWorktree { base } => {
+                            // Older servers ignore `direct_worktree` and fall back to
+                            // the committed comparison from the selected commit to HEAD.
+                            (false, false, true, base, "HEAD".into())
+                        }
+                        DiffTreeType::Since { base, head } => (false, false, false, base, head),
                     };
                     let response = client
                         .request(proto::GetTreeDiff {
@@ -9739,6 +10027,7 @@ impl Repository {
                             base: base.to_string(),
                             head: head.to_string(),
                             includes_worktree,
+                            direct_worktree,
                         })
                         .await?;
 

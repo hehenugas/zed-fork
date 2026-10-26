@@ -354,7 +354,7 @@ pub fn classify_worktrees(
     (git_repos, non_git_paths)
 }
 
-/// Resolves a branch target into the ref the new worktree should be based on.
+/// Resolves a branch target into the ref or commit the new worktree should be based on.
 /// Returns `None` for `CurrentBranch`, meaning "use the current HEAD".
 pub fn resolve_worktree_branch_target(branch_target: &NewWorktreeBranchTarget) -> Option<String> {
     match branch_target {
@@ -364,6 +364,7 @@ pub fn resolve_worktree_branch_target(branch_target: &NewWorktreeBranchTarget) -
             remote_name,
             branch_name,
         } => Some(format!("refs/remotes/{remote_name}/{branch_name}")),
+        NewWorktreeBranchTarget::Commit { sha, .. } => Some(sha.clone()),
     }
 }
 
@@ -373,9 +374,9 @@ fn remote_branch_to_fetch(branch_target: &NewWorktreeBranchTarget) -> Option<(&s
             remote_name,
             branch_name,
         } => Some((remote_name, branch_name)),
-        NewWorktreeBranchTarget::CurrentBranch | NewWorktreeBranchTarget::ExistingBranch { .. } => {
-            None
-        }
+        NewWorktreeBranchTarget::CurrentBranch
+        | NewWorktreeBranchTarget::ExistingBranch { .. }
+        | NewWorktreeBranchTarget::Commit { .. } => None,
     }
 }
 
@@ -465,7 +466,7 @@ fn start_worktree_creations(
     worktree_name: Option<String>,
     existing_worktree_names: &[String],
     existing_worktree_paths: &HashSet<PathBuf>,
-    base_ref: Option<String>,
+    branch_target: &NewWorktreeBranchTarget,
     worktree_directory_setting: &str,
     rng: &mut impl rand::Rng,
     cx: &mut gpui::App,
@@ -487,6 +488,32 @@ fn start_worktree_creations(
             .unwrap_or_else(|| "worktree".to_string())
     });
 
+    // Several visible worktrees can share one underlying Git repository and
+    // therefore resolve to the same destination. Mark the destination for the
+    // selected repository before creating any worktree, so iteration order
+    // cannot accidentally make a sibling worktree's HEAD win.
+    let mut selected_commit_paths = HashSet::default();
+    if let NewWorktreeBranchTarget::Commit {
+        repository_path, ..
+    } = branch_target
+    {
+        for repo in git_repos {
+            let selected_path = repo.update(cx, |repo, _cx| {
+                if repo.work_directory_abs_path.as_ref() == repository_path.as_path() {
+                    Ok(Some(repo.path_for_new_linked_worktree(
+                        &worktree_name,
+                        worktree_directory_setting,
+                    )?))
+                } else {
+                    Ok(None)
+                }
+            })??;
+            if let Some(selected_path) = selected_path {
+                selected_commit_paths.insert(selected_path);
+            }
+        }
+    }
+
     for repo in git_repos {
         let (work_dir, new_path, receiver) = repo.update(cx, |repo, _cx| {
             let new_path =
@@ -495,6 +522,15 @@ fn start_worktree_creations(
                 anyhow::bail!("A worktree already exists at {}", new_path.display());
             }
             let work_dir = repo.work_directory_abs_path.clone();
+            let base_ref = match branch_target {
+                NewWorktreeBranchTarget::Commit { sha, .. }
+                    if selected_commit_paths.contains(&new_path) =>
+                {
+                    Some(sha.clone())
+                }
+                NewWorktreeBranchTarget::Commit { .. } => None,
+                _ => resolve_worktree_branch_target(branch_target),
+            };
             // Only the first repo that resolves to a given target path
             // actually creates the worktree; subsequent linked worktrees of
             // the same repository just contribute a path remapping.
@@ -1040,15 +1076,13 @@ async fn do_create_worktree(
 
     let mut rng = rand::rng();
 
-    let base_ref = resolve_worktree_branch_target(&branch_target);
-
     let (creation_infos, path_remapping) = cx.update(|_, cx| {
         start_worktree_creations(
             &git_repos,
             worktree_name,
             &existing_worktree_names,
             &existing_worktree_paths,
-            base_ref,
+            &branch_target,
             &worktree_directory_setting,
             &mut rng,
             cx,
@@ -1727,6 +1761,19 @@ mod tests {
         );
         assert_eq!(RemoteBranchName::parse("main"), None);
         assert_eq!(RemoteBranchName::parse("origin/"), None);
+    }
+
+    #[test]
+    fn test_commit_worktree_target_resolves_to_selected_sha() {
+        let target = NewWorktreeBranchTarget::Commit {
+            sha: "0123456789abcdef".to_string(),
+            repository_path: PathBuf::from("/root/project"),
+        };
+
+        assert_eq!(
+            resolve_worktree_branch_target(&target),
+            Some("0123456789abcdef".to_string())
+        );
     }
 
     #[test]

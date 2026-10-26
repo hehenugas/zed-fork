@@ -87,6 +87,7 @@ pub struct CommitView {
     remote: Option<GitRemote>,
     is_shallow_boundary: bool,
     file_filter: Option<RepoPath>,
+    comparison_base: Option<SharedString>,
     _load_diff_task: Task<Result<()>>,
 }
 
@@ -195,10 +196,99 @@ impl CommitView {
             workspace,
             stash,
             file_filter,
+            None,
             false,
             window,
             cx,
         )
+    }
+
+    pub fn open_compare(
+        base: String,
+        head: String,
+        repo: WeakEntity<Repository>,
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let commit_diff = repo
+            .update(cx, |repo, cx| {
+                repo.load_commit_diff_between(base.clone(), head.clone(), cx)
+            })
+            .ok();
+        let commit_details = repo
+            .update(cx, |repo, cx| repo.show_commit(head.clone(), cx))
+            .ok();
+        let base_details = repo
+            .update(cx, |repo, cx| repo.show_commit(base.clone(), cx))
+            .ok();
+
+        window
+            .spawn(cx, async move |cx| {
+                let (Some(commit_diff), Some(commit_details), Some(base_details)) =
+                    (commit_diff, commit_details, base_details)
+                else {
+                    return None;
+                };
+                let (commit_diff, commit_details, base_details) =
+                    futures::join!(commit_diff, commit_details, base_details);
+                let commit_diff = commit_diff.log_err()?;
+                let commit_details = commit_details.log_err()?;
+                let comparison_base = base_details.log_err()?.sha;
+                let displayed_head_sha = commit_details.sha.clone();
+                let repo = repo.upgrade()?;
+
+                workspace
+                    .update_in(cx, |workspace, window, cx| {
+                        let project = workspace.project();
+                        let workspace_entity = cx.entity();
+                        let workspace_handle = cx.weak_entity();
+                        let commit_view = cx.new(|cx| {
+                            CommitView::new(
+                                commit_details,
+                                commit_diff,
+                                repo,
+                                project.clone(),
+                                workspace_entity,
+                                workspace_handle,
+                                None,
+                                None,
+                                Some(comparison_base.clone()),
+                                window,
+                                cx,
+                            )
+                        });
+
+                        let pane = workspace.active_pane();
+                        pane.update(cx, |pane, cx| {
+                            let ix = pane.items().position(|item| {
+                                item.downcast::<CommitView>().is_some_and(|view| {
+                                    let view = view.read(cx);
+                                    view.commit.sha == displayed_head_sha
+                                        && view.comparison_base.as_ref() == Some(&comparison_base)
+                                })
+                            });
+                            if let Some(ix) = ix {
+                                let existing = pane
+                                    .items()
+                                    .filter_map(|item| item.downcast::<CommitView>())
+                                    .find(|view| {
+                                        let view = view.read(cx);
+                                        view.commit.sha == displayed_head_sha
+                                            && view.comparison_base.as_ref()
+                                                == Some(&comparison_base)
+                                    })
+                                    .unwrap();
+                                pane.remove_item(existing.item_id(), false, false, window, cx);
+                                pane.add_item(Box::new(commit_view), true, true, ix, window, cx);
+                            } else {
+                                pane.add_item(Box::new(commit_view), true, true, None, window, cx);
+                            }
+                        });
+                    })
+                    .log_err()
+            })
+            .detach();
     }
 
     fn open_with_options(
@@ -207,6 +297,7 @@ impl CommitView {
         workspace: WeakEntity<Workspace>,
         stash: Option<usize>,
         file_filter: Option<RepoPath>,
+        comparison_base: Option<SharedString>,
         ignore_shallow_boundary: bool,
         window: &mut Window,
         cx: &mut App,
@@ -250,6 +341,7 @@ impl CommitView {
                                 workspace_handle,
                                 stash,
                                 file_filter,
+                                comparison_base.clone(),
                                 window,
                                 cx,
                             )
@@ -259,14 +351,21 @@ impl CommitView {
                         pane.update(cx, |pane, cx| {
                             let ix = pane.items().position(|item| {
                                 let commit_view = item.downcast::<CommitView>();
-                                commit_view
-                                    .is_some_and(|view| view.read(cx).commit.sha == commit_sha)
+                                commit_view.is_some_and(|view| {
+                                    let view = view.read(cx);
+                                    view.commit.sha == commit_sha
+                                        && view.comparison_base == comparison_base
+                                })
                             });
                             if let Some(ix) = ix {
                                 let existing = pane
                                     .items()
                                     .filter_map(|item| item.downcast::<CommitView>())
-                                    .find(|view| view.read(cx).commit.sha == commit_sha)
+                                    .find(|view| {
+                                        let view = view.read(cx);
+                                        view.commit.sha == commit_sha
+                                            && view.comparison_base == comparison_base
+                                    })
                                     .unwrap();
 
                                 pane.remove_item(existing.item_id(), false, false, window, cx);
@@ -297,6 +396,7 @@ impl CommitView {
         workspace: WeakEntity<Workspace>,
         stash: Option<usize>,
         file_filter: Option<RepoPath>,
+        comparison_base: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -527,6 +627,7 @@ impl CommitView {
             remote,
             is_shallow_boundary,
             file_filter,
+            comparison_base,
             _load_diff_task: load_diff_task,
         }
     }
@@ -599,6 +700,7 @@ impl CommitView {
                                                     workspace,
                                                     stash,
                                                     file_filter,
+                                                    None,
                                                     false,
                                                     window,
                                                     cx,
@@ -631,6 +733,7 @@ impl CommitView {
                                     workspace.clone(),
                                     stash,
                                     file_filter.clone(),
+                                    None,
                                     true,
                                     window,
                                     cx,
@@ -1192,7 +1295,12 @@ impl Item for CommitView {
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
         let short_sha = self.commit.sha.get(0..7).unwrap_or(&*self.commit.sha);
         let subject = truncate_and_trailoff(self.commit.message.split('\n').next().unwrap(), 20);
-        format!("{short_sha} — {subject}").into()
+        if let Some(base) = &self.comparison_base {
+            let base_short = base.get(..7).unwrap_or(base.as_ref());
+            format!("{base_short}..{short_sha} — {subject}").into()
+        } else {
+            format!("{short_sha} — {subject}").into()
+        }
     }
 
     fn tab_tooltip_content(&self, _: &App) -> Option<TabTooltipContent> {
@@ -1375,6 +1483,7 @@ impl Item for CommitView {
                 remote: self.remote.clone(),
                 is_shallow_boundary: self.is_shallow_boundary,
                 file_filter: self.file_filter.clone(),
+                comparison_base: self.comparison_base.clone(),
                 _load_diff_task: Task::ready(Ok(())),
             }
         })))

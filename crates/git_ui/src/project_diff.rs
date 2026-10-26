@@ -14,7 +14,7 @@ use editor::{
 use git::{Commit, StageAll, StageAndNext, ToggleStaged, UnstageAll, UnstageAndNext};
 use gpui::{
     Action, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, Render,
-    Subscription, Task, WeakEntity, actions,
+    SharedString, Subscription, Task, WeakEntity, actions,
 };
 use language::Capability;
 use multi_buffer::MultiBuffer;
@@ -185,6 +185,26 @@ impl ProjectDiff {
         }
     }
 
+    pub(crate) fn deploy_at_commit_worktree(
+        workspace: &mut Workspace,
+        repository: Entity<Repository>,
+        base_ref: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) {
+        Self::deploy_at(workspace, None, window, cx);
+        let Some(project_diff) = workspace.active_item_as::<Self>(cx) else {
+            return;
+        };
+        project_diff.update(cx, |project_diff, cx| {
+            project_diff.set_repo(Some(repository), cx);
+            let branch_diff = project_diff.diff.read(cx).branch_diff().clone();
+            branch_diff.update(cx, |branch_diff, cx| {
+                branch_diff.set_diff_base(DiffBase::CommitWorktree { base_ref }, cx);
+            });
+        });
+    }
+
     pub fn deploy_at_project_path(
         workspace: &mut Workspace,
         project_path: ProjectPath,
@@ -343,6 +363,7 @@ impl ProjectDiff {
 
     fn button_states(&self, cx: &App) -> ButtonStates {
         let diff = self.diff.read(cx);
+        let can_stage = !matches!(diff.diff_base(cx), DiffBase::CommitWorktree { .. });
         let editor = diff.editor().read(cx).rhs_editor().clone();
         let editor = editor.read(cx);
         let snapshot = diff.multibuffer().read(cx).snapshot(cx);
@@ -372,15 +393,16 @@ impl ProjectDiff {
             .read_with(cx, |workspace, cx| {
                 if let Some(git_panel) = workspace.panel::<GitPanel>(cx) {
                     let git_panel = git_panel.read(cx);
-                    stage_all = git_panel.can_stage_all();
-                    unstage_all = git_panel.can_unstage_all();
+                    stage_all = can_stage && git_panel.can_stage_all();
+                    unstage_all = can_stage && git_panel.can_unstage_all();
                 }
             })
             .ok();
 
         ButtonStates {
-            stage: has_unstaged_hunks,
-            unstage: has_staged_hunks,
+            can_stage,
+            stage: can_stage && has_unstaged_hunks,
+            unstage: can_stage && has_staged_hunks,
             prev_next,
             selection,
             stage_all,
@@ -400,6 +422,7 @@ impl ProjectDiff {
 }
 
 struct ButtonStates {
+    can_stage: bool,
     stage: bool,
     unstage: bool,
     prev_next: bool,
@@ -447,7 +470,13 @@ impl Item for ProjectDiff {
     }
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Uncommitted Changes".into()
+        match self.diff.read(_cx).diff_base() {
+            DiffBase::CommitWorktree { base_ref } => {
+                let base_short = base_ref.get(..7).unwrap_or(base_ref.as_ref());
+                format!("Working Tree vs {base_short}").into()
+            }
+            _ => "Uncommitted Changes".into(),
+        }
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -868,53 +897,56 @@ impl Render for ProjectDiffToolbar {
                             })),
                     ),
             )
-            .child(Divider::vertical())
-            .child(
-                h_group_sm()
-                    .when(button_states.selection, |this| {
-                        this.child(
-                            Button::new("stage", "Toggle Staged")
-                                .tooltip(Tooltip::for_action_title_in(
-                                    "Toggle Staged",
-                                    &ToggleStaged,
-                                    &focus_handle,
-                                ))
-                                .disabled(!button_states.stage && !button_states.unstage)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_action(&ToggleStaged, window, cx)
-                                })),
-                        )
-                    })
-                    .when(!button_states.selection, |this| {
-                        this.child(
-                            Button::new("stage", "Stage")
-                                .disabled(!button_states.stage)
-                                .tooltip(Tooltip::for_action_title_in(
-                                    "Stage and Go to Next Hunk",
-                                    &StageAndNext,
-                                    &focus_handle,
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_action(&StageAndNext, window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("unstage", "Unstage")
-                                .disabled(!button_states.unstage)
-                                .tooltip(Tooltip::for_action_title_in(
-                                    "Unstage and Go to Next Hunk",
-                                    &UnstageAndNext,
-                                    &focus_handle,
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_action(&UnstageAndNext, window, cx)
-                                })),
-                        )
-                    }),
-            )
-            .child(Divider::vertical())
+            .when(button_states.can_stage, |this| {
+                this.child(Divider::vertical()).child(
+                    h_group_sm()
+                        .when(button_states.selection, |this| {
+                            this.child(
+                                Button::new("stage", "Toggle Staged")
+                                    .tooltip(Tooltip::for_action_title_in(
+                                        "Toggle Staged",
+                                        &ToggleStaged,
+                                        &focus_handle,
+                                    ))
+                                    .disabled(!button_states.stage && !button_states.unstage)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.dispatch_action(&ToggleStaged, window, cx)
+                                    })),
+                            )
+                        })
+                        .when(!button_states.selection, |this| {
+                            this.child(
+                                Button::new("stage", "Stage")
+                                    .disabled(!button_states.stage)
+                                    .tooltip(Tooltip::for_action_title_in(
+                                        "Stage and Go to Next Hunk",
+                                        &StageAndNext,
+                                        &focus_handle,
+                                    ))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.dispatch_action(&StageAndNext, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("unstage", "Unstage")
+                                    .disabled(!button_states.unstage)
+                                    .tooltip(Tooltip::for_action_title_in(
+                                        "Unstage and Go to Next Hunk",
+                                        &UnstageAndNext,
+                                        &focus_handle,
+                                    ))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.dispatch_action(&UnstageAndNext, window, cx)
+                                    })),
+                            )
+                        }),
+                )
+            })
+            .when(button_states.can_stage, |this| {
+                this.child(Divider::vertical())
+            })
             .when(
-                button_states.unstage_all && !button_states.stage_all,
+                button_states.can_stage && button_states.unstage_all && !button_states.stage_all,
                 |this| {
                     this.child(
                         Button::new("unstage-all", "Unstage All")
@@ -931,7 +963,7 @@ impl Render for ProjectDiffToolbar {
                 },
             )
             .when(
-                !button_states.unstage_all || button_states.stage_all,
+                button_states.can_stage && (!button_states.unstage_all || button_states.stage_all),
                 |this| {
                     this.child(
                         Button::new("stage-all", "Stage All")
@@ -948,18 +980,19 @@ impl Render for ProjectDiffToolbar {
                     )
                 },
             )
-            .child(Divider::vertical())
-            .child(
-                Button::new("commit", "Commit")
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Commit",
-                        &Commit,
-                        &focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch_action(&Commit, window, cx);
-                    })),
-            )
+            .when(button_states.can_stage, |this| {
+                this.child(Divider::vertical()).child(
+                    Button::new("commit", "Commit")
+                        .tooltip(Tooltip::for_action_title_in(
+                            "Commit",
+                            &Commit,
+                            &focus_handle,
+                        ))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.dispatch_action(&Commit, window, cx);
+                        })),
+                )
+            })
             .when(review_count > 0, |el| {
                 el.child(Divider::vertical()).child(
                     render_send_review_to_agent_button(review_count, &focus_handle).on_click(

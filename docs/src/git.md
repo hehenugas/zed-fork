@@ -119,6 +119,12 @@ To view File History:
 - Right-click on an editor tab and select "View File History"
 - Use the Command Palette and search for "file history"
 
+## Commit Actions
+
+Right-click a commit in Git Graph or the History tab of the Git Panel to open its commit actions. You can inspect the commit, compare it with `HEAD` or the working tree, create a branch, patch, tag, or worktree at that commit, and open its remote permalink when a supported provider is detected.
+
+Checkout opens the selected commit in detached `HEAD`. Reset offers Soft and Mixed modes and confirms the target before changing the current branch. Revert and rebase also require confirmation. If either operation stops on conflicts, use the integrated terminal to continue or abort it.
+
 ## Tags
 
 To create a lightweight tag at `HEAD`, use {#action git::CreateTagAtHead} from the Command Palette. Tags are created locally and are not pushed automatically.

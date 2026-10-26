@@ -306,6 +306,13 @@ message LoadCommitDiffResponse {
   bool is_shallow_boundary = 2;
 }
 
+message LoadCommitDiffBetween {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string base = 3;
+  string head = 4;
+}
+
 message CommitFile {
   string path = 1;
   optional string old_text = 2;
@@ -323,6 +330,35 @@ message GitReset {
     SOFT = 0;
     MIXED = 1;
   }
+}
+
+message GitCheckoutCommit {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string commit = 3;
+}
+
+message GitRevertCommit {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string commit = 3;
+  optional uint32 mainline_parent = 4;
+}
+
+message GitRebaseOnto {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string commit = 3;
+}
+
+message GitFormatPatch {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string commit = 3;
+}
+
+message GitFormatPatchResponse {
+  bytes patch = 1;
 }
 
 message GitCheckoutFiles {
@@ -584,6 +620,7 @@ message GetTreeDiff {
   string base = 4;
   string head = 5;
   bool includes_worktree = 6;
+  bool direct_worktree = 7;
 }
 
 message GetTreeDiffResponse {

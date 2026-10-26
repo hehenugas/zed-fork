@@ -909,6 +909,35 @@ pub trait GitRepository: Send + Sync {
         env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>>;
 
+    fn checkout_commit(
+        &self,
+        _commit: String,
+        _env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        async { bail!("Checking out commits is not supported by this repository") }.boxed()
+    }
+
+    fn revert_commit(
+        &self,
+        _commit: String,
+        _mainline_parent: Option<u32>,
+        _env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        async { bail!("Reverting commits is not supported by this repository") }.boxed()
+    }
+
+    fn rebase_onto(
+        &self,
+        _commit: String,
+        _env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        async { bail!("Rebasing is not supported by this repository") }.boxed()
+    }
+
+    fn format_patch(&self, _commit: String) -> BoxFuture<'_, Result<Vec<u8>>> {
+        async { bail!("Creating patches is not supported by this repository") }.boxed()
+    }
+
     fn checkout_files(
         &self,
         commit: String,
@@ -924,6 +953,15 @@ pub trait GitRepository: Send + Sync {
         ignore_shallow_boundary: bool,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<CommitDiff>>;
+
+    fn load_commit_diff_between(
+        &self,
+        _base: String,
+        _head: String,
+        _cx: AsyncApp,
+    ) -> BoxFuture<'_, Result<CommitDiff>> {
+        async { bail!("Comparing commits is not supported by this repository") }.boxed()
+    }
     fn blame(
         &self,
         path: RepoPath,
@@ -1570,6 +1608,102 @@ impl GitRepository for RealGitRepository {
         .boxed()
     }
 
+    fn load_commit_diff_between(
+        &self,
+        base: String,
+        head: String,
+        cx: AsyncApp,
+    ) -> BoxFuture<'_, Result<CommitDiff>> {
+        let git = self.git_binary();
+        cx.background_spawn(async move {
+            let output = git
+                .build_command(&[
+                    "diff-tree",
+                    "-r",
+                    "-z",
+                    "--no-renames",
+                    "--raw",
+                    "--no-abbrev",
+                    "--no-commit-id",
+                    &base,
+                    &head,
+                    "--",
+                ])
+                .output()
+                .await
+                .context("starting git diff-tree process")?;
+            anyhow::ensure!(
+                output.status.success(),
+                "git diff-tree failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let raw_diff = String::from_utf8_lossy(&output.stdout);
+            let changes = parse_git_diff_raw(&raw_diff);
+            let mut cat_file_process = git
+                .build_command(&["cat-file", "--batch=%(objectsize)"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .context("starting git cat-file process")?;
+            let stdin = cat_file_process
+                .stdin
+                .take()
+                .context("git cat-file process has no stdin")?;
+            let stdout = cat_file_process
+                .stdout
+                .take()
+                .context("git cat-file process has no stdout")?;
+            let mut stdin = BufWriter::with_capacity(512, stdin);
+            let mut stdout = BufReader::new(stdout);
+            let mut info_line = String::new();
+            let mut newline = [b'\0'];
+            let mut files = Vec::new();
+
+            for change in changes {
+                let change = change?;
+                let Some(rel_path) = RelPath::from_unix_str(change.path).log_err() else {
+                    continue;
+                };
+                let objects = [change.new_object, change.old_object];
+                let mut has_blobs = false;
+                for object in objects.iter().flatten() {
+                    if object.kind == CommitDiffObjectKind::Blob {
+                        stdin.write_all(object.oid.as_bytes()).await?;
+                        stdin.write_all(b"\n").await?;
+                        has_blobs = true;
+                    }
+                }
+                if has_blobs {
+                    stdin.flush().await?;
+                }
+
+                let [new_object, old_object] = objects;
+                let new_object =
+                    load_commit_object(new_object, &mut stdout, &mut info_line, &mut newline)
+                        .await?;
+                let old_object =
+                    load_commit_object(old_object, &mut stdout, &mut info_line, &mut newline)
+                        .await?;
+                let is_binary = new_object.as_ref().is_some_and(|object| object.is_binary)
+                    || old_object.as_ref().is_some_and(|object| object.is_binary);
+                files.push(CommitFile {
+                    path: RepoPath(Arc::from(rel_path)),
+                    old_content: old_object.map(|object| object.content),
+                    new_content: new_object.map(|object| object.content),
+                    is_binary,
+                });
+            }
+
+            Ok(CommitDiff {
+                files,
+                is_shallow_boundary: false,
+            })
+        })
+        .boxed()
+    }
+
     fn reset(
         &self,
         commit: String,
@@ -1646,6 +1780,113 @@ impl GitRepository for RealGitRepository {
                 Ok(output.stdout)
             })
             .boxed()
+    }
+
+    fn checkout_commit(
+        &self,
+        commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        async move {
+            let output = git?
+                .build_command(&["switch", "--detach", &commit])
+                .envs(env.iter())
+                .output()
+                .await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to check out commit:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn revert_commit(
+        &self,
+        commit: String,
+        mainline_parent: Option<u32>,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        async move {
+            let mut args = vec![OsString::from("revert"), OsString::from("--no-edit")];
+            if let Some(parent) = mainline_parent {
+                args.push("-m".into());
+                args.push(parent.to_string().into());
+            }
+            args.push(commit.into());
+            let output = git?.build_command(&args).envs(env.iter()).output().await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to revert commit:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn rebase_onto(
+        &self,
+        commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        async move {
+            let output = git?
+                .build_command(&["rebase", &commit])
+                .envs(env.iter())
+                .output()
+                .await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to rebase current branch:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn format_patch(&self, commit: String) -> BoxFuture<'_, Result<Vec<u8>>> {
+        let git = self.git_binary();
+        async move {
+            let revision = git
+                .run(&["rev-list", "--parents", "-n", "1", &commit])
+                .await?;
+            let parent_count = revision.split_whitespace().count().saturating_sub(1);
+            let output = if parent_count > 1 {
+                let first_parent = format!("{commit}^1");
+                git.build_command(&[
+                    "diff",
+                    "--binary",
+                    "--full-index",
+                    &first_parent,
+                    &commit,
+                    "--",
+                ])
+                .output()
+                .await?
+            } else if parent_count == 0 {
+                git.build_command(&["format-patch", "--root", "--stdout", "-1", &commit])
+                    .output()
+                    .await?
+            } else {
+                git.build_command(&["format-patch", "--stdout", "-1", &commit])
+                    .output()
+                    .await?
+            };
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to create patch:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(output.stdout)
+        }
+        .boxed()
     }
 
     fn load_commit_template(&self) -> BoxFuture<'_, Result<Option<GitCommitTemplate>>> {
@@ -1931,8 +2172,9 @@ impl GitRepository for RealGitRepository {
     fn diff_tree(&self, request: DiffTreeType) -> BoxFuture<'_, Result<TreeDiff>> {
         let git = self.git_binary_in_worktree();
         let working_directory = self.working_directory.clone();
-        let merge_base_ref = match &request {
-            DiffTreeType::MergeBaseWithWorktree { base } => Some(base.clone()),
+        let worktree_base = match &request {
+            DiffTreeType::MergeBaseWithWorktree { base } => Some((base.clone(), true)),
+            DiffTreeType::SinceWithWorktree { base } => Some((base.clone(), false)),
             DiffTreeType::MergeBase { .. } | DiffTreeType::Since { .. } => None,
         };
 
@@ -1957,6 +2199,17 @@ impl GitRepository for RealGitRepository {
                 "--abbrev=64",
                 "--no-renames",
                 "--merge-base",
+                base.as_str(),
+                "--",
+            ]
+            .map(OsString::from)
+            .to_vec(),
+            DiffTreeType::SinceWithWorktree { base } => [
+                "diff",
+                "--raw",
+                "-z",
+                "--abbrev=64",
+                "--no-renames",
                 base.as_str(),
                 "--",
             ]
@@ -1987,7 +2240,7 @@ impl GitRepository for RealGitRepository {
 
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let mut tree_diff = stdout.parse::<TreeDiff>()?;
-                let Some(merge_base_ref) = merge_base_ref else {
+                let Some((worktree_base_ref, use_merge_base)) = worktree_base else {
                     return Ok(tree_diff);
                 };
                 let Some(working_directory) = working_directory else {
@@ -2033,16 +2286,21 @@ impl GitRepository for RealGitRepository {
                     return Ok(tree_diff);
                 }
 
-                let merge_base_output = git
-                    .build_command(&["merge-base", merge_base_ref.as_ref(), "HEAD"])
-                    .output()
-                    .await?;
-                if !merge_base_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&merge_base_output.stderr);
-                    anyhow::bail!("git merge-base failed: {stderr}");
-                }
-                let merge_base = String::from_utf8_lossy(&merge_base_output.stdout);
-                let merge_base = merge_base.trim();
+                let merge_base = if use_merge_base {
+                    let merge_base_output = git
+                        .build_command(&["merge-base", worktree_base_ref.as_ref(), "HEAD"])
+                        .output()
+                        .await?;
+                    if !merge_base_output.status.success() {
+                        let stderr = String::from_utf8_lossy(&merge_base_output.stderr);
+                        anyhow::bail!("git merge-base failed: {stderr}");
+                    }
+                    String::from_utf8_lossy(&merge_base_output.stdout)
+                        .trim()
+                        .to_owned()
+                } else {
+                    worktree_base_ref.to_string()
+                };
 
                 for (path, old) in recreated {
                     let full_path = working_directory.join(path.as_std_path());
@@ -2052,7 +2310,7 @@ impl GitRepository for RealGitRepository {
                     };
                     let base_entry = git
                         .build_command(
-                            &["ls-tree", merge_base, "--", path.as_unix_str()].map(OsString::from),
+                            &["ls-tree", &merge_base, "--", path.as_unix_str()].map(OsString::from),
                         )
                         .output()
                         .await?;

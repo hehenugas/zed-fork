@@ -506,6 +506,11 @@ pub enum DiffTreeType {
     MergeBaseWithWorktree {
         base: SharedString,
     },
+    /// Compares a commit directly with the current working tree, without
+    /// calculating a merge base with `HEAD`.
+    SinceWithWorktree {
+        base: SharedString,
+    },
     Since {
         base: SharedString,
         head: SharedString,

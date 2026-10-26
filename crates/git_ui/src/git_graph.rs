@@ -1477,6 +1477,7 @@ pub struct GitGraph {
     repo_id: RepositoryId,
     changed_files_scroll_handle: UniformListScrollHandle,
     changed_files_view_mode: ChangedFilesViewMode,
+    compare_selection: Option<Oid>,
     commit_details_metadata_collapsed: bool,
     commit_details_message_collapsed: bool,
     changed_files_expanded_dirs: HashMap<RepoPath, bool>,
@@ -1742,6 +1743,7 @@ impl GitGraph {
             repo_id,
             changed_files_scroll_handle: UniformListScrollHandle::new(),
             changed_files_view_mode: ChangedFilesViewMode::default(),
+            compare_selection: None,
             commit_details_metadata_collapsed: false,
             commit_details_message_collapsed: false,
             changed_files_expanded_dirs: HashMap::default(),
@@ -2752,6 +2754,7 @@ impl GitGraph {
         let context_menu = commit_context_menu(
             CommitContextMenuData {
                 sha: commit.data.sha,
+                parents: commit.data.parents.to_vec(),
                 tag_names: commit
                     .data
                     .tag_names()
@@ -2764,10 +2767,17 @@ impl GitGraph {
             self.focus_handle.clone(),
             repository,
             self.workspace.clone(),
+            Some(cx.entity().downgrade()),
+            self.compare_selection,
             window,
             cx,
         );
         self.set_context_menu(context_menu, position, Some(index), window, cx);
+    }
+
+    pub(crate) fn set_compare_selection(&mut self, sha: Option<Oid>, cx: &mut Context<Self>) {
+        self.compare_selection = sha;
+        cx.notify();
     }
 
     fn set_context_menu(

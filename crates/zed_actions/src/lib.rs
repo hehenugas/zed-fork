@@ -313,10 +313,16 @@ pub enum NewWorktreeBranchTarget {
         remote_name: String,
         branch_name: String,
     },
+    /// Create a detached worktree at a commit from one repository in a
+    /// multi-repository project. Other repositories retain their current HEAD.
+    Commit {
+        sha: String,
+        repository_path: PathBuf,
+    },
 }
 
 /// Creates a new git worktree and switches the workspace to it.
-/// Dispatched by the unified worktree picker when the user selects a "Create new worktree" entry.
+/// Dispatched by the unified worktree picker or a commit action that creates a worktree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Action)]
 #[action(namespace = git)]
 #[serde(deny_unknown_fields)]

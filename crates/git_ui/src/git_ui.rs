@@ -1664,6 +1664,7 @@ mod view_commit_tests {
             commit_context_menu::commit_context_menu(
                 commit_context_menu::CommitContextMenuData {
                     sha: selected_commit,
+                    parents: Vec::new(),
                     tag_names: Vec::new(),
                 },
                 commit_context_menu::CommitContextMenuSource::GitPanel,
@@ -1671,6 +1672,8 @@ mod view_commit_tests {
                 focus_handle,
                 Some(repository.downgrade()),
                 workspace_handle,
+                None,
+                None,
                 window,
                 cx,
             )

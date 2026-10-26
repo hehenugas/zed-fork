@@ -1206,6 +1206,7 @@ struct BulkStaging {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CommitHistoryEntry {
     sha: Oid,
+    parents: Vec<Oid>,
     tag_names: Vec<SharedString>,
 }
 
@@ -1213,6 +1214,7 @@ impl From<&Arc<InitialGraphCommitData>> for CommitHistoryEntry {
     fn from(commit: &Arc<InitialGraphCommitData>) -> Self {
         Self {
             sha: commit.sha,
+            parents: commit.parents.to_vec(),
             tag_names: commit
                 .tag_names()
                 .into_iter()
@@ -7530,6 +7532,7 @@ impl GitPanel {
         let context_menu = commit_context_menu(
             CommitContextMenuData {
                 sha: commit.sha,
+                parents: commit.parents,
                 tag_names: commit.tag_names,
             },
             CommitContextMenuSource::GitPanel,
@@ -7537,6 +7540,8 @@ impl GitPanel {
             self.focus_handle.clone(),
             Some(repository.downgrade()),
             self.workspace.clone(),
+            None,
+            None,
             window,
             cx,
         );
@@ -11387,6 +11392,7 @@ mod tests {
                 panel.commit_history,
                 CommitHistory::Loaded(Rc::from([CommitHistoryEntry {
                     sha,
+                    parents: Vec::new(),
                     tag_names: Vec::new(),
                 }]))
             );
@@ -11474,6 +11480,7 @@ mod tests {
         let error = SharedString::from("git log failed");
         let entries: Rc<[CommitHistoryEntry]> = Rc::from([CommitHistoryEntry {
             sha,
+            parents: Vec::new(),
             tag_names: Vec::new(),
         }]);
         let no_entries: Rc<[CommitHistoryEntry]> = Rc::from([]);
