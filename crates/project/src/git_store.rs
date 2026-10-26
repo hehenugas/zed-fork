@@ -4630,7 +4630,7 @@ impl GitStore {
                     cx,
                 )
             })
-            .await??;
+            .await?;
 
         Ok(proto::LoadCommitDiffResponse {
             files: commit_diff
