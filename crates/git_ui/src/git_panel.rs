@@ -9543,10 +9543,6 @@ impl GitPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let active_repository_id = self
-            .active_repository
-            .as_ref()
-            .map(|repository| repository.read(cx).id);
         let git_panel = cx.weak_entity();
         let scroll_handle = self.repository_sections_scroll_handle.clone();
         let all_collapsed = !self.repository_sections.is_empty()
@@ -9597,26 +9593,6 @@ impl GitPanel {
                                             }
                                         }
                                     }),
-                            )
-                            .child(
-                                IconButton::new(
-                                    "open-active-repository-git-graph",
-                                    IconName::GitGraph,
-                                )
-                                .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Open Git Graph for Active Repository"))
-                                .on_click({
-                                    let git_panel = git_panel.clone();
-                                    move |_, window, cx| {
-                                        if let Some(repository_id) = active_repository_id {
-                                            git_panel
-                                                .update(cx, |panel, cx| {
-                                                    panel.open_git_graph(repository_id, window, cx);
-                                                })
-                                                .log_err();
-                                        }
-                                    }
-                                }),
                             )
                             .child(
                         IconButton::new(
@@ -9678,6 +9654,7 @@ impl GitPanel {
                                 ("Repository".to_owned(), "No branch".to_owned(), 0, 0, 0)
                             });
                         let repository_id_for_click = *repository_id;
+                        let repository_id_for_graph = *repository_id;
                         let panel = panel.clone();
 
                         v_flex()
@@ -9742,7 +9719,7 @@ impl GitPanel {
                                                     .truncate(true),
                                                     Tooltip::text("Switch Branch"),
                                                 )
-                                                .anchor(Anchor::TopLeft),
+                                            .anchor(Anchor::TopLeft),
                                             ),
                                     )
                                     .child(div().flex_1())
@@ -9752,6 +9729,30 @@ impl GitPanel {
                                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                 cx.stop_propagation()
                                             })
+                                            .child(
+                                                IconButton::new(
+                                                    SharedString::from(format!(
+                                                        "section-git-graph-{repository_id:?}"
+                                                    )),
+                                                    IconName::GitGraph,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text("Open Git Graph"))
+                                                .on_click({
+                                                    let git_panel = git_panel.clone();
+                                                    move |_, window, cx| {
+                                                        git_panel
+                                                            .update(cx, |panel, cx| {
+                                                                panel.open_git_graph(
+                                                                    repository_id_for_graph,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            })
+                                                            .log_err();
+                                                    }
+                                                }),
+                                            )
                                             .child(
                                                 IconButton::new(
                                                     SharedString::from(format!(
