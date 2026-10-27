@@ -110,8 +110,14 @@ impl EntryViewState {
         }
     }
 
-    pub(crate) fn clear_auto_expand_tracking(&mut self) {
-        self.auto_expanded_thinking_block = None;
+    pub(crate) fn clear_auto_expand_tracking(&mut self, cx: &App) -> bool {
+        let Some(key) = self.auto_expanded_thinking_block.take() else {
+            return false;
+        };
+
+        AgentSettings::get_global(cx).thinking_display == ThinkingBlockDisplay::Auto
+            && !self.user_toggled_thinking_blocks.contains(&key)
+            && self.expanded_thinking_blocks.remove(&key)
     }
 
     pub(crate) fn is_auto_expanded_thinking_block(&self, key: (usize, usize)) -> bool {
