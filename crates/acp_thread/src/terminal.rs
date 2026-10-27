@@ -973,11 +973,41 @@ pub async fn create_terminal_entity(
         .await
 }
 
-// Disable pagers so agent/terminal commands don't hang behind interactive UIs
+// Disable pagers so agent/terminal commands don't hang behind interactive UIs,
+// and force colored output across various toolchains (git, cargo, npm, pytest, gcc, dotnet, etc.)
 pub(crate) fn disable_pagers_through_env(env: &mut collections::HashMap<String, String>) {
     env.insert("PAGER".into(), "".into());
     // Override user core.pager (e.g. delta) which Git prefers over PAGER
     env.insert("GIT_PAGER".into(), "cat".into());
+    // Terminal capabilities
+    env.entry("TERM".into()).or_insert_with(|| "xterm-256color".into());
+    env.entry("COLORTERM".into()).or_insert_with(|| "truecolor".into());
+    // Universal / POSIX color forcing (Node.js, Chalk, Jest, npm, Vitest, Bun, etc.)
+    env.entry("FORCE_COLOR".into()).or_insert_with(|| "1".into());
+    env.entry("CLICOLOR_FORCE".into()).or_insert_with(|| "1".into());
+    env.entry("CLICOLOR".into()).or_insert_with(|| "1".into());
+    // Git: preserve terminal colors for status, diff, branch, log when paging through cat
+    env.entry("GIT_CONFIG_COUNT".into()).or_insert_with(|| "1".into());
+    env.entry("GIT_CONFIG_KEY_0".into()).or_insert_with(|| "color.ui".into());
+    env.entry("GIT_CONFIG_VALUE_0".into()).or_insert_with(|| "always".into());
+    // Rust / Cargo
+    env.entry("CARGO_TERM_COLOR".into()).or_insert_with(|| "always".into());
+    env.entry("RUST_LOG_STYLE".into()).or_insert_with(|| "always".into());
+    // Python ecosystem (pytest, Python 3.13+ tracebacks, ruff, mypy)
+    env.entry("PY_COLORS".into()).or_insert_with(|| "1".into());
+    env.entry("PYTHON_COLORS".into()).or_insert_with(|| "1".into());
+    env.entry("RUFF_COLOR".into()).or_insert_with(|| "always".into());
+    env.entry("MYPY_FORCE_COLOR".into()).or_insert_with(|| "1".into());
+    // C / C++ / Build systems
+    env.entry("GCC_COLORS".into()).or_insert_with(|| {
+        "error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01".into()
+    });
+    env.entry("CMAKE_COLOR_DIAGNOSTICS".into()).or_insert_with(|| "ON".into());
+    // .NET CLI ANSI color redirection
+    env.entry("DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION".into())
+        .or_insert_with(|| "1".into());
+    // Ruby / RSpec
+    env.entry("RSPEC_COLOR".into()).or_insert_with(|| "1".into());
 }
 
 #[cfg(all(test, target_os = "linux"))]

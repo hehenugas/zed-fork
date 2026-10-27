@@ -9048,8 +9048,18 @@ impl ThreadView {
                                 .font_buffer(cx)
                                 .text_size(rems_from_px(12_f32))
                                 .line_height(rems_from_px(18_f32))
-                                .text_color(cx.theme().colors().text)
-                                .child(format!("$ {command_text}")),
+                                .flex()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().colors().terminal_ansi_green)
+                                        .child("$"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().colors().text)
+                                        .child(command_text),
+                                ),
                         )
                         .child(div().absolute().top_0().right_2().child(copy_button))
                         .when_some(terminal_view, |this, terminal_view| {
@@ -11671,13 +11681,9 @@ impl ThreadView {
     fn render_ansi_output(
         &self,
         markdown: &Entity<Markdown>,
-        tool_call: &ToolCall,
+        _tool_call: &ToolCall,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        if !matches!(tool_call.kind(), acp_v2::ToolKind::Execute) {
-            return None;
-        }
-
         let source = markdown.read(cx).source();
         if !source.contains('\x1b') {
             return None;
